@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SportMeridian Predictor 2026/2027 - Monte Carlo Football Engine</title>
+  <title>Simulatore IA 2026/2027 - Monte Carlo Football Engine</title>
   
   <!-- Fonts: Outfit & Inter -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -16,8 +16,8 @@
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
   
-  <!-- Custom SportMeridian Stylesheet -->
-  <link rel="stylesheet" href="/static/style.css">
+  <!-- Custom Simulatore IA Stylesheet -->
+  <link rel="stylesheet" href="/static/style.css?v=20260914-2">
 </head>
 <body class="text-slate-100 flex flex-col min-h-screen">
 
@@ -32,7 +32,7 @@
         </div>
         <div>
           <div class="flex items-center gap-2">
-            <span class="text-xl font-extrabold tracking-tight text-white font-['Outfit']">SPORT<span class="text-[#00f0ff]">MERIDIAN</span></span>
+            <span class="text-xl font-extrabold tracking-tight text-white font-['Outfit']">SIMULATORE <span class="text-[#00f0ff]">IA</span></span>
             <span class="text-[10px] px-2 py-0.5 rounded-full bg-[#0284c7]/30 text-[#38bdf8] font-bold border border-[#00f0ff]/30 tracking-wider">2026/2027</span>
           </div>
           <p class="text-xs text-slate-400 font-medium">Bivariate Dixon-Coles Monte Carlo Engine</p>
@@ -282,6 +282,8 @@
         </button>
       </div>
 
+      <div id="analysis-setup-panel" class="bg-[#0b1638] border border-[#00f0ff]/20 rounded-2xl p-5 mb-6"></div>
+
       <!-- Match Versus Banner -->
       <div class="bg-[#0b1638] border border-[#00f0ff]/20 rounded-2xl p-5 mb-6">
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 items-center text-center">
@@ -296,6 +298,8 @@
               <span>Elo: <strong id="modal-home-elo" class="text-[#00f0ff]">1800</strong></span>
               <span>•</span>
               <span>Attacco: <strong id="modal-home-att" class="text-slate-200">1.25</strong></span>
+              <span>•</span>
+              <span>Difesa: <strong id="modal-home-def" class="text-slate-200">1.00</strong></span>
             </div>
             <div id="modal-home-form" class="flex items-center gap-1 mt-2">
               <!-- Pallini forma -->
@@ -326,7 +330,9 @@
             <div class="text-xs text-slate-400 flex items-center gap-2 mt-1">
               <span>Elo: <strong id="modal-away-elo" class="text-[#38bdf8]">1750</strong></span>
               <span>•</span>
-              <span>Difesa: <strong id="modal-away-def" class="text-slate-200">0.90</strong></span>
+              <span>Attacco: <strong id="modal-away-att" class="text-slate-200">1.00</strong></span>
+              <span>•</span>
+              <span>Difesa: <strong id="modal-away-def" class="text-slate-200">1.00</strong></span>
             </div>
             <div id="modal-away-form" class="flex items-center gap-1 mt-2">
               <!-- Pallini forma -->
@@ -537,7 +543,7 @@
   <footer class="mt-auto border-t border-[#00f0ff]/15 bg-[#050a18] py-6 text-center text-xs text-slate-400">
     <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
       <div class="flex items-center gap-2">
-        <span class="font-bold text-white font-['Outfit']">SportMeridian Predictor</span>
+        <span class="font-bold text-white font-['Outfit']">Simulatore IA</span>
         <span>•</span>
         <span>Stagione 2026/2027</span>
       </div>
@@ -548,6 +554,6 @@
   </footer>
 
   <!-- Application Logic -->
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=20260914-2"></script>
 </body>
 </html>

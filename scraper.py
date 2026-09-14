@@ -6,6 +6,10 @@ Modulo scraper.py - Gestione quote di mercato e probabilità implicite.
 - Calibrazione quote realistiche per campionati e coppe europee 2026/2027
 """
 
+import json
+import os
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -167,12 +171,54 @@ def fetch_market_odds(
     away_attack: float = 1.0,
     home_defense: float = 1.0,
     away_defense: float = 1.0,
-    external_url: Optional[str] = None
+    external_url: Optional[str] = None,
+    sport_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Tenta il recupero di quote da endpoint web/scraping esterno (se fornito).
     In caso di assenza o timeout, ricade sul motore calibrato ad alta precisione.
     """
+    odds_api_key = os.getenv("THE_ODDS_API_KEY")
+    odds_api_sport = sport_key or os.getenv("THE_ODDS_API_SPORT_KEY")
+    if odds_api_key and odds_api_sport:
+        try:
+            params = urlencode({
+                "apiKey": odds_api_key,
+                "regions": "eu",
+                "markets": "h2h",
+                "oddsFormat": "decimal",
+            })
+            request = Request(
+                f"https://api.the-odds-api.com/v4/sports/{odds_api_sport}/odds/?{params}",
+                headers={"Accept": "application/json"},
+            )
+            with urlopen(request, timeout=5.0) as response:
+                events = json.loads(response.read().decode("utf-8"))
+            home_norm = home_team.casefold().strip()
+            away_norm = away_team.casefold().strip()
+            for event in events:
+                if event.get("home_team", "").casefold().strip() != home_norm:
+                    continue
+                if event.get("away_team", "").casefold().strip() != away_norm:
+                    continue
+                bookmakers = event.get("bookmakers") or []
+                if not bookmakers:
+                    continue
+                outcomes = bookmakers[0].get("markets", [{}])[0].get("outcomes", [])
+                odds = {}
+                for outcome in outcomes:
+                    name = outcome.get("name")
+                    if name == event.get("home_team"):
+                        odds["1"] = outcome.get("price")
+                    elif name == event.get("away_team"):
+                        odds["2"] = outcome.get("price")
+                    elif name == "Draw":
+                        odds["X"] = outcome.get("price")
+                if len(odds) >= 2:
+                    return {"source": "The Odds API", "odds": odds}
+        except Exception:
+            pass
+
     if external_url:
         try:
             import requests

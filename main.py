@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import database
+import data_sync
 from engine import MatchConfig, TeamParams, simulate_match
 import updater
 
@@ -50,6 +51,8 @@ class TeamInput(BaseModel):
     elo: Optional[float] = Field(None, description="Rating Elo della squadra", ge=800.0, le=2400.0, examples=[1835.0])
     cards_factor: Optional[float] = Field(None, description="Fattore propensione cartellini", ge=0.2, le=2.5, examples=[0.95])
     corners_factor: Optional[float] = Field(None, description="Fattore propensione corner", ge=0.2, le=2.5, examples=[1.25])
+    xg_for: Optional[float] = Field(None, description="xG medi fatti inseriti dall'utente", ge=0.0, le=10.0)
+    xg_against: Optional[float] = Field(None, description="xG medi subiti inseriti dall'utente", ge=0.0, le=10.0)
 
 
 class SimulationPayload(BaseModel):
@@ -65,6 +68,8 @@ class SimulationPayload(BaseModel):
     n_simulations: int = Field(50_000, description="Numero esatto di simulazioni Monte Carlo", ge=1000, le=100_000)
     seed: Optional[int] = Field(None, description="Seed opzionale per riproducibilità")
     auto_save_history: bool = Field(False, description="Salva automaticamente la simulazione nello storico")
+    custom_odds: Optional[Dict[str, float]] = Field(None, description="Quote reali inserite dall'utente; {} esegue la simulazione senza Value Bet")
+    require_xg: bool = Field(False, description="Richiede xG fatti e subiti per entrambe le squadre")
 
 
 class SaveHistoryPayload(BaseModel):
@@ -129,6 +134,15 @@ def health_check():
     return {"status": "healthy", "timestamp": time.time(), "database_connected": Path(database.DB_FILE).exists()}
 
 
+@app.post("/api/sync")
+def sync_data_endpoint(season: Optional[int] = Query(None, ge=2000, le=2100)):
+    """Sincronizza calendario, risultati, classifiche e marcatori da football-data.org."""
+    try:
+        return data_sync.sync_current_season(season=season)
+    except data_sync.FootballDataError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 # --- ENDPOINTS CONSULTAZIONE DATABASE ---
 
 @app.get("/api/leagues")
@@ -171,7 +185,7 @@ def get_matches(
     league_id: Optional[int] = Query(None, description="Filtra per campionato"),
     status: Optional[str] = Query(None, description="Filtra per stato ('scheduled' o 'completed')"),
     matchday: Optional[str] = Query(None, description="Filtra per giornata"),
-    limit: int = Query(50, ge=1, le=200)
+    limit: int = Query(50, ge=1, le=500)
 ):
     """Restituisce il calendario e risultati delle partite."""
     return database.get_matches(league_id=league_id, status=status, matchday=matchday, limit=limit)
@@ -313,6 +327,9 @@ def _resolve_team_params(
     elo = 1500.0
     cards_factor = 1.0
     corners_factor = 1.0
+    recent_form = "D-D-D-D-D"
+    xg_for = None
+    xg_against = None
 
     if db_team:
         name = db_team["name"]
@@ -321,6 +338,10 @@ def _resolve_team_params(
         elo = db_team["elo"]
         cards_factor = db_team["cards_factor"]
         corners_factor = db_team["corners_factor"]
+        recent_form = db_team["recent_form"]
+        if "xg_source" in db_team.keys() and db_team["xg_source"] != "not_available":
+            xg_for = db_team["xg_for"]
+            xg_against = db_team["xg_against"]
 
     # Se l'utente ha fornito valori espliciti nel payload, essi hanno priorità (override)
     if explicit_input:
@@ -336,6 +357,10 @@ def _resolve_team_params(
             cards_factor = explicit_input.cards_factor
         if explicit_input.corners_factor is not None:
             corners_factor = explicit_input.corners_factor
+        if explicit_input.xg_for is not None:
+            xg_for = explicit_input.xg_for
+        if explicit_input.xg_against is not None:
+            xg_against = explicit_input.xg_against
 
     return TeamParams(
         name=name,
@@ -344,6 +369,9 @@ def _resolve_team_params(
         elo=elo,
         cards_factor=cards_factor,
         corners_factor=corners_factor,
+        recent_form=recent_form,
+        xg_for=xg_for,
+        xg_against=xg_against,
     )
 
 
@@ -368,6 +396,19 @@ def run_simulation_post(payload: SimulationPayload) -> Dict[str, Any]:
         home_params = _resolve_team_params(h_id, payload.home_team, default_name="Squadra Casa", is_home=True)
         away_params = _resolve_team_params(a_id, payload.away_team, default_name="Squadra Ospite", is_home=False)
 
+        if payload.require_xg:
+            missing_xg = []
+            for label, team in (("casa", home_params), ("ospite", away_params)):
+                if team.xg_for is None:
+                    missing_xg.append(f"xG fatti {label}")
+                if team.xg_against is None:
+                    missing_xg.append(f"xG subiti {label}")
+            if missing_xg:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Inserire tutti gli xG richiesti: " + ", ".join(missing_xg),
+                )
+
         # Se home_advantage non specificato esplicitamente e la squadra è su DB, usa il suo home_advantage
         home_adv = payload.home_advantage or 1.15
         if h_id:
@@ -385,7 +426,7 @@ def run_simulation_post(payload: SimulationPayload) -> Dict[str, Any]:
             n_simulations=payload.n_simulations,
             seed=payload.seed,
         )
-        result = simulate_match(config)
+        result = simulate_match(config, custom_odds=payload.custom_odds)
         
         # Aggiungiamo riferimenti al database nei metadati
         result["metadata"]["database_source"] = {

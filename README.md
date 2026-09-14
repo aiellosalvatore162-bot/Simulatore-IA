@@ -21,6 +21,47 @@ pip install -r requirements.txt
 python seed.py
 ```
 
+Il seed contiene dati dimostrativi e non deve essere usato come fonte reale. Per
+sincronizzare calendario, risultati, classifiche e marcatori ufficiali, configura
+le chiavi nel terminale (non inserirle nei file del progetto):
+
+```bash
+export FOOTBALL_DATA_API_KEY="..."
+export FOOTBALL_DATA_SEASON="2026"
+export THE_ODDS_API_KEY="..."
+export THE_ODDS_API_SPORT_KEY="soccer_italy_serie_a"
+curl -X POST "http://127.0.0.1:8000/api/sync?season=2026"
+# In alternativa, con il server fermo:
+python data_sync.py
+```
+
+Il piano gratuito di football-data.org limita le richieste al minuto. Per
+sincronizzare tutte le competizioni senza superare il limite, esegui blocchi da
+tre competizioni (le competizioni già sincronizzate vengono conservate):
+
+```bash
+export FOOTBALL_DATA_COMPETITIONS="SA,PL,FL1"
+python data_sync.py
+export FOOTBALL_DATA_COMPETITIONS="PD,PPL"
+python data_sync.py
+export FOOTBALL_DATA_COMPETITIONS="BL1,DED"
+python data_sync.py
+export FOOTBALL_DATA_COMPETITIONS="CL"
+python data_sync.py
+```
+
+`football-data.org` è la fonte per calendario, risultati, classifiche e marcatori.
+`The Odds API` viene usata esclusivamente per le quote; non fornisce classifiche
+o marcatori. La sincronizzazione è atomica: se il piano API non consente una
+competizione, i dati precedenti non vengono cancellati.
+
+Per le competizioni non incluse nel piano `football-data.org`, il sincronizzatore
+prova automaticamente SofaScore come fallback web gratuito. Se vuoi usare solo
+SofaScore, puoi rimuovere temporaneamente `FOOTBALL_DATA_API_KEY`; in quel caso
+la risposta riporterà `source: "SofaScore"`. SofaScore non offre un contratto API
+pubblico stabile: se restituisce HTTP 403 o cambia gli endpoint, la competizione
+viene segnalata in `errors` e non vengono inseriti dati inventati.
+
 ### 3. Avvio del server FastAPI
 ```bash
 uvicorn main:app --reload --host 127.0.0.1 --port 8000

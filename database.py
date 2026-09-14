@@ -45,6 +45,7 @@ def init_db(db_path: Optional[str | Path] = None) -> None:
             recent_form TEXT NOT NULL DEFAULT 'D-D-D-D-D',
             xg_for REAL NOT NULL DEFAULT 1.35,
             xg_against REAL NOT NULL DEFAULT 1.20,
+            xg_source TEXT NOT NULL DEFAULT 'not_available',
             matches_played_stats INTEGER NOT NULL DEFAULT 0,
             cards_factor REAL NOT NULL DEFAULT 1.0,
             corners_factor REAL NOT NULL DEFAULT 1.0
@@ -127,6 +128,9 @@ def init_db(db_path: Optional[str | Path] = None) -> None:
         CREATE INDEX IF NOT EXISTS idx_history_created ON simulation_history(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_h2h_teams ON h2h_matches(home_team_id, away_team_id);
         """)
+        team_columns = {row["name"] for row in conn.execute("PRAGMA table_info(teams)")}
+        if "xg_source" not in team_columns:
+            conn.execute("ALTER TABLE teams ADD COLUMN xg_source TEXT NOT NULL DEFAULT 'not_available'")
     conn.close()
 
 

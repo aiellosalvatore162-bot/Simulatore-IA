@@ -1,5 +1,5 @@
 /**
- * SportMeridian Predictor - Frontend Logic (app.js)
+ * Simulatore IA - Frontend Logic (app.js)
  * Gestisce l'interazione SPA, le chiamate API REST e l'integrazione
  * con il motore di simulazione Monte Carlo (50.000 iterazioni).
  */
@@ -125,7 +125,7 @@ async function refreshCurrentLeague() {
 
   try {
     const [matchesRes, standingsRes, scorersRes, teamsRes] = await Promise.all([
-      fetch(`/api/matches?league_id=${lid}&limit=100`),
+      fetch(`/api/matches?league_id=${lid}&limit=500`),
       fetch(`/api/leagues/${lid}/standings`),
       fetch(`/api/leagues/${lid}/top-scorers?limit=15`),
       fetch(`/api/leagues/${lid}/teams`)
@@ -136,13 +136,19 @@ async function refreshCurrentLeague() {
     state.topScorers = await scorersRes.json();
     state.teams = await teamsRes.json();
 
+    const league = state.leagues.find(item => item.id === lid);
+    const matchdayPrefix = getMatchdayPrefix(state.matches, league);
+    state.matches = state.matches.map(match => ({
+      ...match,
+      matchday: normalizeMatchday(match.matchday, matchdayPrefix),
+    }));
+
     // Mappa squadre per id
     state.teamsMap = {};
     state.teams.forEach(t => { state.teamsMap[t.id] = t; });
 
-    // Estrai le giornate uniche
-    const days = [...new Set(state.matches.map(m => m.matchday))];
-    state.matchdays = days;
+    // Mostra anche i turni futuri che non hanno ancora partite nel database.
+    state.matchdays = buildExpectedMatchdays(league, state.teams, state.matches, matchdayPrefix);
 
     // Seleziona la prima giornata o la giornata corrente
     if (!state.selectedMatchday || !days.includes(state.selectedMatchday)) {
@@ -161,6 +167,46 @@ async function refreshCurrentLeague() {
   } catch (err) {
     console.error("Errore durante il refresh del campionato:", err);
   }
+}
+
+function getMatchdayPrefix(matches, league) {
+  const existing = matches.find(match => match.matchday && /\d+/.test(String(match.matchday)));
+  const value = existing ? String(existing.matchday) : '';
+  if (value.includes('Matchday')) return 'Matchday';
+  if (value.includes('Jornada')) return 'Jornada';
+  if (value.includes('Spieltag')) return 'Spieltag';
+  if (value.includes('Journée')) return 'Journée';
+  if (value.includes('Giornata')) return 'Giornata';
+  return league?.type === 'cup' ? 'Matchday' : 'Giornata';
+}
+
+function normalizeMatchday(value, prefix) {
+  const number = String(value || '').match(/\d+/)?.[0];
+  return number ? `${prefix} ${number}` : String(value || `${prefix} 1`);
+}
+
+function buildExpectedMatchdays(league, teams, matches, prefix) {
+  const existing = [...new Set(matches.map(match => match.matchday).filter(Boolean))];
+  const teamCount = teams.length;
+  let totalMatchdays = 0;
+
+  if (league?.name === 'Champions League') {
+    totalMatchdays = 8;
+  } else if (teamCount === 20) {
+    totalMatchdays = 38;
+  } else if (teamCount === 18) {
+    totalMatchdays = 34;
+  }
+
+  if (!totalMatchdays) {
+    return existing.sort((first, second) => extractMatchdayNumber(first) - extractMatchdayNumber(second));
+  }
+
+  return Array.from({ length: totalMatchdays }, (_, index) => `${prefix} ${index + 1}`);
+}
+
+function extractMatchdayNumber(value) {
+  return Number(String(value).match(/\d+/)?.[0] || 0);
 }
 
 function switchLeagueTab(tabKey) {
@@ -193,8 +239,7 @@ function renderMatchdaysSlider() {
   slider.innerHTML = state.matchdays.map((mday, idx) => {
     const isActive = mday === state.selectedMatchday;
     // Estrai numero per visualizzazione compatta
-    const numMatch = mday.match(/\d+/);
-    const labelNum = numMatch ? numMatch[0] : (idx + 1);
+    const labelNum = extractMatchdayNumber(mday) || (idx + 1);
     const shortTitle = mday.includes('Giornata') ? 'G.' : (mday.includes('Matchday') ? 'MD' : 'T.');
 
     return `
@@ -412,17 +457,18 @@ function renderXgTable() {
       </thead>
       <tbody>
         ${sortedTeams.map(t => {
-          const delta = (t.xg_for - t.xg_against).toFixed(2);
+          const hasXg = t.xg_source && t.xg_source !== 'not_available';
+          const delta = hasXg ? (t.xg_for - t.xg_against).toFixed(2) : null;
           return `
             <tr class="table-row border-b border-white/5">
               <td class="font-bold text-white">${t.name}</td>
               <td class="text-center font-mono text-[#00f0ff] font-bold">${Math.round(t.elo)}</td>
               <td class="text-center font-mono text-slate-300">${t.attack.toFixed(2)}</td>
               <td class="text-center font-mono text-slate-300">${t.defense.toFixed(2)}</td>
-              <td class="text-center font-mono text-emerald-400 font-semibold">${t.xg_for.toFixed(2)}</td>
-              <td class="text-center font-mono text-rose-400 font-semibold">${t.xg_against.toFixed(2)}</td>
-              <td class="text-right font-mono font-bold ${delta > 0 ? 'text-[#00f0ff]' : 'text-slate-400'}">
-                ${delta > 0 ? '+' : ''}${delta}
+              <td class="text-center font-mono text-emerald-400 font-semibold">${hasXg ? Number(t.xg_for).toFixed(2) : 'N/D'}</td>
+              <td class="text-center font-mono text-rose-400 font-semibold">${hasXg ? Number(t.xg_against).toFixed(2) : 'N/D'}</td>
+              <td class="text-right font-mono font-bold ${delta !== null && delta > 0 ? 'text-[#00f0ff]' : 'text-slate-400'}">
+                ${delta !== null ? `${delta > 0 ? '+' : ''}${delta}` : 'N/D'}
               </td>
             </tr>
           `;
@@ -432,11 +478,84 @@ function renderXgTable() {
   `;
 }
 
+function rangeMarketItems(market, labelPrefix = '') {
+  return Object.entries(market)
+    .filter(([key]) => key !== 'expected_mean')
+    .map(([key, stat]) => ({
+      label: `${labelPrefix}${key.replaceAll('_', '-')}`,
+      stat,
+    }));
+}
+
 // ================= MODALE SIMULAZIONE & ANALISI (50.000 RUNS) =================
 
 async function openAnalysis(matchId, homeTeamId, awayTeamId) {
   const modal = document.getElementById('simulation-modal');
   modal.classList.add('open');
+
+  const homeTeam = state.teamsMap[homeTeamId] || {};
+  const awayTeam = state.teamsMap[awayTeamId] || {};
+  renderAnalysisSetup(matchId, homeTeamId, awayTeamId, homeTeam, awayTeam);
+  return;
+}
+
+const quoteMarketGroups = [
+  ['1x2_finale', '1X2 Finale', ['1', 'X', '2']],
+  ['1x2_primo_tempo', '1X2 Primo Tempo', ['1', 'X', '2']],
+  ['over_under_finale', 'Over/Under Finale', ['Over_0.5', 'Under_0.5', 'Over_1.5', 'Under_1.5', 'Over_2.5', 'Under_2.5', 'Over_3.5', 'Under_3.5', 'Over_4.5', 'Under_4.5']],
+  ['over_under_primo_tempo', 'Over/Under Primo Tempo', ['Over_0.5', 'Under_0.5', 'Over_1.5', 'Under_1.5', 'Over_2.5', 'Under_2.5', 'Over_3.5', 'Under_3.5', 'Over_4.5', 'Under_4.5']],
+  ['goal_nogoal_finale', 'Goal/No Goal Finale', ['Goal', 'No_Goal']],
+  ['goal_nogoal_primo_tempo', 'Goal/No Goal Primo Tempo', ['Goal', 'No_Goal']],
+  ['multigol_partita', 'Multigol Partita', ['0_1', '0_2', '0_3', '0_4', '0_5', '1_2', '1_3', '1_4', '1_5', '2_3', '2_4', '2_5', '2_6', '3_4', '3_5', '3_6']],
+  ['multigol_casa', 'Multigol Casa', ['0_1', '0_2', '0_3', '0_4', '0_5', '1_2', '1_3', '1_4', '1_5', '2_3', '2_4', '2_5', '2_6', '3_4', '3_5', '3_6']],
+  ['multigol_ospite', 'Multigol Ospite', ['0_1', '0_2', '0_3', '0_4', '0_5', '1_2', '1_3', '1_4', '1_5', '2_3', '2_4', '2_5', '2_6', '3_4', '3_5', '3_6']],
+  ['cartellini', 'Cartellini', ['Over_3.5', 'Under_3.5', 'Over_4.5', 'Under_4.5', 'Over_5.5', 'Under_5.5']],
+  ['calci_dangolo', 'Calci d\'angolo', ['Over_8.5', 'Under_8.5', 'Over_9.5', 'Under_9.5', 'Over_10.5', 'Under_10.5', 'Over_11.5', 'Under_11.5']],
+  ['over_under_squadra_casa', 'Over/Under Casa', ['Over_0.5', 'Under_0.5', 'Over_1.5', 'Under_1.5', 'Over_2.5', 'Under_2.5', 'Over_3.5', 'Under_3.5']],
+  ['over_under_squadra_ospite', 'Over/Under Ospite', ['Over_0.5', 'Under_0.5', 'Over_1.5', 'Under_1.5', 'Over_2.5', 'Under_2.5', 'Over_3.5', 'Under_3.5']],
+];
+
+function renderAnalysisSetup(matchId, homeId, awayId, home, away) {
+  const panel = document.getElementById('analysis-setup-panel');
+  if (!panel) return;
+  const xgValue = (team, field) => team.xg_source && team.xg_source !== 'not_available' ? Number(team[field]).toFixed(2) : '';
+  panel.innerHTML = `
+    <div class="flex items-start justify-between gap-4 mb-4">
+      <div>
+        <h3 class="text-lg font-bold text-white">Prepara analisi</h3>
+        <p class="text-xs text-slate-400">Inserisci obbligatoriamente gli xG fatti e subiti di entrambe le squadre. Le quote bookmaker sono facoltative.</p>
+      </div>
+      <button onclick="runPreparedAnalysis(${matchId || 'null'}, ${homeId || 'null'}, ${awayId || 'null'})" class="glow-btn text-xs py-2 px-4">Avvia analisi</button>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5 text-xs">
+      <div class="bg-[#070d1e] rounded-xl p-3 border border-white/10"><strong class="text-white">${home.name || 'Casa'}</strong><br>Forma: ${home.recent_form || 'N/D'}<div class="grid grid-cols-2 gap-2 mt-2"><label class="text-[11px] text-slate-400">xG fatti<input id="analysis-home-xg-for" type="number" min="0" max="10" step="0.01" value="${xgValue(home, 'xg_for')}" placeholder="es. 1.55" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label><label class="text-[11px] text-slate-400">xG subiti<input id="analysis-home-xg-against" type="number" min="0" max="10" step="0.01" value="${xgValue(home, 'xg_against')}" placeholder="es. 1.10" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label></div></div>
+      <div class="bg-[#070d1e] rounded-xl p-3 border border-white/10"><strong class="text-white">${away.name || 'Ospite'}</strong><br>Forma: ${away.recent_form || 'N/D'}<div class="grid grid-cols-2 gap-2 mt-2"><label class="text-[11px] text-slate-400">xG fatti<input id="analysis-away-xg-for" type="number" min="0" max="10" step="0.01" value="${xgValue(away, 'xg_for')}" placeholder="es. 1.35" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label><label class="text-[11px] text-slate-400">xG subiti<input id="analysis-away-xg-against" type="number" min="0" max="10" step="0.01" value="${xgValue(away, 'xg_against')}" placeholder="es. 1.25" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label></div></div>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      ${quoteMarketGroups.map(([category, title, keys]) => `<div class="bg-[#070d1e] rounded-xl p-3 border border-white/10"><h4 class="text-xs font-bold text-[#00f0ff] mb-2">${title}</h4><div class="grid grid-cols-2 gap-2">${keys.map(key => `<label class="text-[11px] text-slate-400">${key.replaceAll('_', '-')}<input data-odds-key="${category}:${key}" type="number" min="1.01" step="0.01" placeholder="Quota" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label>`).join('')}</div></div>`).join('')}
+    </div>`;
+}
+
+async function runPreparedAnalysis(matchId, homeTeamId, awayTeamId) {
+  const customOdds = {};
+  document.querySelectorAll('[data-odds-key]').forEach(input => {
+    if (input.value && Number(input.value) > 1) customOdds[input.dataset.oddsKey] = Number(input.value);
+  });
+  const numberOrNull = id => {
+    const value = document.getElementById(id)?.value;
+    return value === '' || value === undefined ? null : Number(value);
+  };
+  const xgFields = [
+    ['analysis-home-xg-for', 'xG fatti casa'],
+    ['analysis-home-xg-against', 'xG subiti casa'],
+    ['analysis-away-xg-for', 'xG fatti ospite'],
+    ['analysis-away-xg-against', 'xG subiti ospite'],
+  ];
+  const missingXg = xgFields.filter(([id]) => numberOrNull(id) === null).map(([, label]) => label);
+  if (missingXg.length > 0) {
+    document.getElementById('assistant-explanation-text').innerText = `Per rendere l'analisi basata sugli xG devi compilare: ${missingXg.join(', ')}.`;
+    return;
+  }
 
   // Loading indicator temporaneo
   document.getElementById('modal-expected-score').innerText = "...";
@@ -450,12 +569,20 @@ async function openAnalysis(matchId, homeTeamId, awayTeamId) {
   `;
 
   try {
-    let url = `/api/simulate?`;
-    if (matchId) url += `match_id=${matchId}&`;
-    else if (homeTeamId && awayTeamId) url += `home_team_id=${homeTeamId}&away_team_id=${awayTeamId}&`;
-    url += `n_sims=50000`;
-
-    const res = await fetch(url);
+    const res = await fetch('/api/simulate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        match_id: matchId,
+        home_team_id: homeTeamId,
+        away_team_id: awayTeamId,
+        n_simulations: 50000,
+        custom_odds: customOdds,
+        require_xg: true,
+        home_team: { xg_for: numberOrNull('analysis-home-xg-for'), xg_against: numberOrNull('analysis-home-xg-against') },
+        away_team: { xg_for: numberOrNull('analysis-away-xg-for'), xg_against: numberOrNull('analysis-away-xg-against') },
+      }),
+    });
     if (!res.ok) throw new Error("Errore chiamata simulazione");
     const data = await res.json();
     state.currentSimulation = data;
@@ -485,12 +612,14 @@ function populateSimulationModal(data, homeTeamId, awayTeamId) {
     name: meta.home_team, 
     elo: src.home_team_elo || 1750, 
     attack: 1.2, 
+    defense: 1.0,
     recent_form: "W-D-W" 
   };
   const awayTeam = (aId && state.teamsMap[aId]) || { 
     name: meta.away_team, 
     elo: src.away_team_elo || 1700, 
     defense: 0.95, 
+    attack: 1.0,
     recent_form: "L-W-D" 
   };
 
@@ -499,12 +628,23 @@ function populateSimulationModal(data, homeTeamId, awayTeamId) {
   document.getElementById('modal-home-elo').innerText = Math.round(homeTeam.elo);
   document.getElementById('modal-away-elo').innerText = Math.round(awayTeam.elo);
   document.getElementById('modal-home-att').innerText = (homeTeam.attack !== undefined) ? Number(homeTeam.attack).toFixed(2) : "1.20";
+  document.getElementById('modal-home-def').innerText = (homeTeam.defense !== undefined) ? Number(homeTeam.defense).toFixed(2) : "1.00";
+  document.getElementById('modal-away-att').innerText = (awayTeam.attack !== undefined) ? Number(awayTeam.attack).toFixed(2) : "1.00";
   document.getElementById('modal-away-def').innerText = (awayTeam.defense !== undefined) ? Number(awayTeam.defense).toFixed(2) : "0.95";
   document.getElementById('modal-home-form').innerHTML = renderFormPills(homeTeam.recent_form || "W-D-W");
   document.getElementById('modal-away-form').innerHTML = renderFormPills(awayTeam.recent_form || "L-W-D");
 
   document.getElementById('modal-exec-time').innerText = meta.execution_time_ms;
   document.getElementById('modal-sim-badge').innerText = `50.000 iterazioni • ${meta.execution_time_ms} ms • λ: ${meta.expected_goals_home_lambda} vs μ: ${meta.expected_goals_away_mu}`;
+  const xgInputs = meta.xg_inputs || {};
+  const xgStatus = xgInputs.applied ? 'xG inseriti applicati' : 'xG non inseriti';
+  const enteredXg = xgInputs.applied
+    ? ` • Inseriti H ${xgInputs.home_xg_for ?? '-'}/${xgInputs.home_xg_against ?? '-'} A ${xgInputs.away_xg_for ?? '-'}/${xgInputs.away_xg_against ?? '-'}`
+    : '';
+  const organic = meta.organic_expected_goals_home !== undefined
+    ? ` • Organico ${meta.organic_expected_goals_home}/${meta.organic_expected_goals_away}`
+    : '';
+  document.getElementById('modal-sim-badge').innerText += ` • ${xgStatus}${enteredXg}${organic}`;
 
   // 1X2 Probabilità e barre
   const p1 = markets["1x2_finale"]["1"];
@@ -689,21 +829,10 @@ function renderMarketsGrid() {
     ]));
 
     // 3. Over / Under Finale
-    cards.push(createMarketCard("Over / Under Finale", "arrow-up-down", [
-      { label: "Over 1.5", stat: m["over_under_finale"]["Over_1.5"] },
-      { label: "Under 1.5", stat: m["over_under_finale"]["Under_1.5"] },
-      { label: "Over 2.5", stat: m["over_under_finale"]["Over_2.5"] },
-      { label: "Under 2.5", stat: m["over_under_finale"]["Under_2.5"] },
-      { label: "Over 3.5", stat: m["over_under_finale"]["Over_3.5"] },
-    ]));
+    cards.push(createMarketCard("Over / Under Finale", "arrow-up-down", rangeMarketItems(m["over_under_finale"])));
 
     // 4. Over / Under Primo Tempo
-    cards.push(createMarketCard("Over / Under Primo Tempo", "hourglass", [
-      { label: "1T: Over 0.5", stat: m["over_under_primo_tempo"]["Over_0.5"] },
-      { label: "1T: Under 0.5", stat: m["over_under_primo_tempo"]["Under_0.5"] },
-      { label: "1T: Over 1.5", stat: m["over_under_primo_tempo"]["Over_1.5"] },
-      { label: "1T: Under 1.5", stat: m["over_under_primo_tempo"]["Under_1.5"] },
-    ]));
+    cards.push(createMarketCard("Over / Under Primo Tempo", "hourglass", rangeMarketItems(m["over_under_primo_tempo"], "1T: ")));
   }
 
   // 5. Goal / No Goal & 6. Goal / No Goal 1T
@@ -719,21 +848,11 @@ function renderMarketsGrid() {
     ]));
 
     // 9. Multigol Partita
-    cards.push(createMarketCard("Multigol Partita", "hash", [
-      { label: "Multigol 1-3", stat: m["multigol_partita"]["1_3"] },
-      { label: "Multigol 1-4", stat: m["multigol_partita"]["1_4"] },
-      { label: "Multigol 2-4", stat: m["multigol_partita"]["2_4"] },
-      { label: "Multigol 2-5", stat: m["multigol_partita"]["2_5"] },
-      { label: "Multigol 3-5", stat: m["multigol_partita"]["3_5"] },
-    ]));
+    cards.push(createMarketCard("Multigol Partita", "hash", rangeMarketItems(m["multigol_partita"], "Multigol ")));
 
     // 10. Multigol Casa & 11. Multigol Ospite
-    cards.push(createMarketCard("Multigol per Squadra", "users", [
-      { label: "Casa Multigol 1-2", stat: m["multigol_casa"]["1_2"] },
-      { label: "Casa Multigol 1-3", stat: m["multigol_casa"]["1_3"] },
-      { label: "Ospite Multigol 1-2", stat: m["multigol_ospite"]["1_2"] },
-      { label: "Ospite Multigol 1-3", stat: m["multigol_ospite"]["1_3"] },
-    ]));
+    cards.push(createMarketCard("Multigol Casa", "home", rangeMarketItems(m["multigol_casa"], "Casa ")));
+    cards.push(createMarketCard("Multigol Ospite", "plane", rangeMarketItems(m["multigol_ospite"], "Ospite ")));
   }
 
   // 7. Cartellini & 8. Corner
@@ -771,17 +890,9 @@ function renderMarketsGrid() {
       { label: "1T 1-2 + 2T 0-1", stat: m["multigol_primo_tempo_combo_secondo_tempo"]["1T_1_2_e_2T_0_1"] },
     ]));
 
-    cards.push(createMarketCard("Over / Under Squadra Casa", "home", [
-      { label: "Casa Over 0.5", stat: m["over_under_squadra_casa"]["Over_0.5"] },
-      { label: "Casa Over 1.5", stat: m["over_under_squadra_casa"]["Over_1.5"] },
-      { label: "Casa Over 2.5", stat: m["over_under_squadra_casa"]["Over_2.5"] },
-    ]));
+    cards.push(createMarketCard("Over / Under Squadra Casa", "home", rangeMarketItems(m["over_under_squadra_casa"], "Casa ")));
 
-    cards.push(createMarketCard("Over / Under Squadra Ospite", "plane", [
-      { label: "Ospite Over 0.5", stat: m["over_under_squadra_ospite"]["Over_0.5"] },
-      { label: "Ospite Over 1.5", stat: m["over_under_squadra_ospite"]["Over_1.5"] },
-      { label: "Ospite Over 2.5", stat: m["over_under_squadra_ospite"]["Over_2.5"] },
-    ]));
+    cards.push(createMarketCard("Over / Under Squadra Ospite", "plane", rangeMarketItems(m["over_under_squadra_ospite"], "Ospite ")));
   }
 
   container.innerHTML = cards.join('');

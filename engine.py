@@ -20,6 +20,9 @@ class TeamParams:
     elo: float = 1500.0       # Punteggio Elo
     cards_factor: float = 1.0 # Propensione ai cartellini
     corners_factor: float = 1.0 # Propensione a generare corner
+    recent_form: str = "D-D-D-D-D"
+    xg_for: float | None = None
+    xg_against: float | None = None
 
 
 @dataclass
@@ -32,6 +35,17 @@ class MatchConfig:
     dixon_coles_rho: float = -0.11
     n_simulations: int = 50_000
     seed: int | None = None
+
+
+def calculate_team_strength(team: TeamParams) -> float:
+    """Punteggio organico 0-100, esplicito e composto da Elo, attacco, difesa e forma."""
+    form_points = {"W": 1.0, "D": 0.5, "L": 0.0}
+    form_values = [form_points.get(item.strip().upper(), 0.5) for item in team.recent_form.split("-")[-5:]]
+    form_score = float(np.mean(form_values)) * 100.0 if form_values else 50.0
+    elo_score = float(np.clip(50.0 + (team.elo - 1500.0) / 8.0, 0.0, 100.0))
+    attack_score = float(np.clip(team.attack / 2.0 * 100.0, 0.0, 100.0))
+    defense_score = float(np.clip((2.0 - team.defense) / 1.2 * 100.0, 0.0, 100.0))
+    return round(0.40 * elo_score + 0.25 * attack_score + 0.25 * defense_score + 0.10 * form_score, 2)
 
 
 def compute_dixon_coles_tau(x: int, y: int, lambda_: float, mu: float, rho: float) -> float:
@@ -55,6 +69,14 @@ def calculate_expected_goals(config: MatchConfig) -> Tuple[float, float]:
     Calcola i tassi attesi di gol (lambda per casa, mu per trasferta)
     integrando forza offensiva, difensiva, fattore campo e rating Elo.
     """
+    def form_multiplier(form: str) -> float:
+        values = {"W": 1.04, "D": 1.0, "L": 0.96}
+        results = [values.get(item.strip().upper(), 1.0) for item in form.split("-")[-5:]]
+        return float(np.mean(results)) if results else 1.0
+
+    home_form = form_multiplier(config.home_team.recent_form)
+    away_form = form_multiplier(config.away_team.recent_form)
+
     # Calcolo differenziale Elo
     delta_elo = config.home_team.elo - config.away_team.elo
     # Moltiplicatore Elo con scala logistica/esponenziale smussata
@@ -65,22 +87,46 @@ def calculate_expected_goals(config: MatchConfig) -> Tuple[float, float]:
     elo_mult_home = max(0.35, min(2.8, elo_mult_home))
     elo_mult_away = max(0.35, min(2.8, elo_mult_away))
 
-    # Lambda: attacco casa * difesa trasferta * fattore campo * base * elo
-    lambda_ = (
+    # Modello organico: attacco/difesa/Elo/forma.
+    model_lambda = (
         config.base_goals_home
         * config.home_team.attack
         * config.away_team.defense
         * config.home_advantage
         * elo_mult_home
+        * home_form
+        * (2.0 - away_form)
     )
 
-    # Mu: attacco trasferta * difesa casa * base * elo
-    mu = (
+    model_mu = (
         config.base_goals_away
         * config.away_team.attack
         * config.home_team.defense
         * elo_mult_away
+        * away_form
+        * (2.0 - home_form)
     )
+
+    # Gli xG inseriti descrivono il rendimento stagionale: quando disponibili,
+    # la coppia attacco di una squadra + xG concessi dall'avversaria diventa
+    # il riferimento principale, mentre il modello organico resta un correttivo.
+    lambda_ = model_lambda
+    mu = model_mu
+    if config.home_team.xg_for is not None and config.away_team.xg_against is not None:
+        xg_home = (config.home_team.xg_for + config.away_team.xg_against) / 2.0
+        lambda_ = model_lambda * 0.20 + xg_home * config.home_advantage * 0.80
+    elif config.home_team.xg_for is not None:
+        lambda_ = model_lambda * 0.20 + config.home_team.xg_for * config.home_advantage * 0.80
+    elif config.away_team.xg_against is not None:
+        lambda_ = model_lambda * 0.20 + config.away_team.xg_against * config.home_advantage * 0.80
+
+    if config.away_team.xg_for is not None and config.home_team.xg_against is not None:
+        xg_away = (config.away_team.xg_for + config.home_team.xg_against) / 2.0
+        mu = model_mu * 0.20 + xg_away * 0.80
+    elif config.away_team.xg_for is not None:
+        mu = model_mu * 0.20 + config.away_team.xg_for * 0.80
+    elif config.home_team.xg_against is not None:
+        mu = model_mu * 0.20 + config.home_team.xg_against * 0.80
 
     # Protezione limiti minimi e massimi
     lambda_ = max(0.1, min(6.5, float(lambda_)))
@@ -400,12 +446,14 @@ def simulate_match(config: MatchConfig) -> Dict[str, Any]:
         return res
 
     mg_ranges_match = [
-        (0, 1), (1, 2), (1, 3), (1, 4), (1, 5),
+        (0, 1), (0, 2), (0, 3), (0, 4), (0, 5),
+        (1, 2), (1, 3), (1, 4), (1, 5),
         (2, 3), (2, 4), (2, 5), (2, 6),
         (3, 4), (3, 5), (3, 6)
     ]
     mg_ranges_team = [
-        (0, 1), (1, 2), (1, 3), (1, 4), (1, 5),
+        (0, 1), (0, 2), (0, 3), (0, 4), (0, 5),
+        (1, 2), (1, 3), (1, 4), (1, 5),
         (2, 3), (2, 4), (2, 5), (2, 6),
         (3, 4), (3, 5), (3, 6)
     ]
@@ -477,7 +525,32 @@ def calculate_value_bets(markets: Dict[str, Any], odds_dict: Dict[str, float]) -
     """
     candidates = []
 
-    # 1X2 Finale
+    def add_candidate(category: str, market_key: str, quota: float) -> None:
+        stat = markets.get(category, {}).get(market_key)
+        if not stat or quota <= 1.0:
+            return
+        p_sim = float(stat["percentage"]) / 100.0
+        p_imp = 1.0 / quota
+        ev = (p_sim * quota) - 1.0
+        candidates.append({
+            "market": f"{category}: {market_key.replace('_', ' ')}",
+            "sign": market_key,
+            "category": category,
+            "odds": quota,
+            "simulated_prob_pct": round(p_sim * 100.0, 2),
+            "implied_prob_pct": round(p_imp * 100.0, 2),
+            "edge_pct": round((p_sim - p_imp) * 100.0, 2),
+            "ev_pct": round(ev * 100.0, 2),
+            "is_value": ev > 0.02,
+        })
+
+    # Quote inserite dall'utente: categoria:chiave evita collisioni tra mercati.
+    for quote_key, quote in odds_dict.items():
+        if ":" in quote_key:
+            category, market_key = quote_key.split(":", 1)
+            add_candidate(category, market_key, float(quote))
+
+    # Compatibilita con le quote storiche piatte del motore.
     for sign in ["1", "X", "2"]:
         if sign in odds_dict and sign in markets.get("1x2_finale", {}):
             quota = float(odds_dict[sign])
@@ -711,12 +784,14 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, float]] 
         return res
 
     mg_ranges_match = [
-        (0, 1), (1, 2), (1, 3), (1, 4), (1, 5),
+        (0, 1), (0, 2), (0, 3), (0, 4), (0, 5),
+        (1, 2), (1, 3), (1, 4), (1, 5),
         (2, 3), (2, 4), (2, 5), (2, 6),
         (3, 4), (3, 5), (3, 6)
     ]
     mg_ranges_team = [
-        (0, 1), (1, 2), (1, 3), (1, 4), (1, 5),
+        (0, 1), (0, 2), (0, 3), (0, 4), (0, 5),
+        (1, 2), (1, 3), (1, 4), (1, 5),
         (2, 3), (2, 4), (2, 5), (2, 6),
         (3, 4), (3, 5), (3, 6)
     ]
@@ -807,7 +882,7 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, float]] 
 
     # 8. Recupero quote e calcolo Value Betting
     from scraper import fetch_market_odds
-    if custom_odds:
+    if custom_odds is not None:
         market_odds = custom_odds
     else:
         odds_res = fetch_market_odds(
@@ -845,6 +920,52 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, float]] 
             "away_team": config.away_team.name,
             "expected_goals_home_lambda": round(lambda_, 3),
             "expected_goals_away_mu": round(mu, 3),
+            "organic_expected_goals_home": round(calculate_expected_goals(MatchConfig(
+                home_team=TeamParams(
+                    name=config.home_team.name,
+                    attack=config.home_team.attack,
+                    defense=config.home_team.defense,
+                    elo=config.home_team.elo,
+                    cards_factor=config.home_team.cards_factor,
+                    corners_factor=config.home_team.corners_factor,
+                    recent_form=config.home_team.recent_form,
+                ),
+                away_team=TeamParams(
+                    name=config.away_team.name,
+                    attack=config.away_team.attack,
+                    defense=config.away_team.defense,
+                    elo=config.away_team.elo,
+                    cards_factor=config.away_team.cards_factor,
+                    corners_factor=config.away_team.corners_factor,
+                    recent_form=config.away_team.recent_form,
+                ),
+                home_advantage=config.home_advantage,
+                base_goals_home=config.base_goals_home,
+                base_goals_away=config.base_goals_away,
+                dixon_coles_rho=config.dixon_coles_rho,
+            ))[0], 3),
+            "organic_expected_goals_away": round(calculate_expected_goals(MatchConfig(
+                home_team=TeamParams(name=config.home_team.name, attack=config.home_team.attack, defense=config.home_team.defense, elo=config.home_team.elo, recent_form=config.home_team.recent_form),
+                away_team=TeamParams(name=config.away_team.name, attack=config.away_team.attack, defense=config.away_team.defense, elo=config.away_team.elo, recent_form=config.away_team.recent_form),
+                home_advantage=config.home_advantage,
+                base_goals_home=config.base_goals_home,
+                base_goals_away=config.base_goals_away,
+                dixon_coles_rho=config.dixon_coles_rho,
+            ))[1], 3),
+            "xg_inputs": {
+                "home_xg_for": config.home_team.xg_for,
+                "home_xg_against": config.home_team.xg_against,
+                "away_xg_for": config.away_team.xg_for,
+                "away_xg_against": config.away_team.xg_against,
+                "applied": any(value is not None for value in (
+                    config.home_team.xg_for,
+                    config.home_team.xg_against,
+                    config.away_team.xg_for,
+                    config.away_team.xg_against,
+                )),
+            },
+            "home_team_strength": calculate_team_strength(config.home_team),
+            "away_team_strength": calculate_team_strength(config.away_team),
             "simulations_count": n_sims,
             "execution_time_ms": elapsed_ms,
             "model": "Bivariate Poisson with Dixon-Coles Correction (Monte Carlo Vectorized)"
