@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SportMeridian Predictor 2026/2027 - Monte Carlo Football Engine</title>
+  
+  <!-- Fonts: Outfit & Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Tailwind CDN per utility rapide -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <!-- Custom SportMeridian Stylesheet -->
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="text-slate-100 flex flex-col min-h-screen">
+
+  <!-- ================= NAVBAR ================= -->
+  <header class="sticky top-0 z-50 bg-[#070d1e]/90 backdrop-blur-md border-b border-[#00f0ff]/15">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
+      
+      <!-- Brand Logo -->
+      <div class="flex items-center gap-3 cursor-pointer" onclick="navigateToHome()">
+        <div class="w-11 h-11 rounded-xl bg-gradient-to-tr from-[#0284c7] to-[#00f0ff] flex items-center justify-center shadow-[0_0_15px_rgba(0,240,255,0.4)]">
+          <i data-lucide="activity" class="w-6 h-6 text-[#031326] stroke-[2.5]"></i>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="text-xl font-extrabold tracking-tight text-white font-['Outfit']">SPORT<span class="text-[#00f0ff]">MERIDIAN</span></span>
+            <span class="text-[10px] px-2 py-0.5 rounded-full bg-[#0284c7]/30 text-[#38bdf8] font-bold border border-[#00f0ff]/30 tracking-wider">2026/2027</span>
+          </div>
+          <p class="text-xs text-slate-400 font-medium">Bivariate Dixon-Coles Monte Carlo Engine</p>
+        </div>
+      </div>
+
+      <!-- Center / Engine Live Badge -->
+      <div class="hidden md:flex items-center gap-3 bg-[#101d42]/80 px-4 py-2 rounded-full border border-[#00f0ff]/20">
+        <span class="relative flex h-2.5 w-2.5">
+          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00f0ff] opacity-75"></span>
+          <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#00f0ff]"></span>
+        </span>
+        <span class="text-xs font-semibold text-slate-300">50.000 Iterazioni Vettorializzate</span>
+      </div>
+
+      <!-- Right Action Links -->
+      <div class="flex items-center gap-3">
+        <button onclick="openHistoryModal()" class="text-xs px-3.5 py-1.5 rounded-lg bg-[#0284c7]/20 hover:bg-[#0284c7]/40 text-[#00f0ff] border border-[#00f0ff]/30 transition flex items-center gap-1.5 font-semibold">
+          <i data-lucide="history" class="w-4 h-4"></i>
+          <span>Storico Simulazioni</span>
+        </button>
+        <a href="/docs" target="_blank" class="text-xs px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 transition flex items-center gap-1.5 font-medium">
+          <i data-lucide="code-xml" class="w-4 h-4 text-[#00f0ff]"></i>
+          <span>Swagger API</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- ================= MAIN CONTAINER ================= -->
+  <main class="flex-grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+    <!-- ================= VIEW 1: DASHBOARD HOME (12 LEAGUES) ================= -->
+    <section id="view-home">
+      <!-- Hero Banner -->
+      <div class="glass-card p-6 sm:p-10 mb-10 relative overflow-hidden">
+        <div class="absolute -right-16 -top-16 w-80 h-80 bg-[#00f0ff]/10 rounded-full blur-3xl pointer-events-none"></div>
+        <div class="max-w-3xl relative z-10">
+          <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#0284c7]/20 border border-[#00f0ff]/30 text-[#00f0ff] text-xs font-semibold mb-4">
+            <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
+            Stagione 2026/2027 • 12 Competizioni Top
+          </div>
+          <h1 class="text-3xl sm:text-5xl font-extrabold tracking-tight text-white mb-4 font-['Outfit']">
+            Simulatore Statistico & <span class="text-transparent bg-clip-text bg-gradient-to-r from-[#00f0ff] to-[#38bdf8]">Pronostici Avanzati</span>
+          </h1>
+          <p class="text-slate-300 text-sm sm:text-base leading-relaxed mb-6 font-normal">
+            Calcola la convergenza e la sinergia statistica tra oltre 15 mercati scommesse eseguendo esattamente 
+            <strong class="text-white">50.000 simulazioni Monte Carlo vettorializzate</strong> basate sulla distribuzione di 
+            <span class="text-[#00f0ff]">Poisson bivariata con correzione Dixon-Coles</span> per i punteggi bassi.
+          </p>
+
+          <!-- Quick Metrics Grid -->
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
+            <div class="bg-[#0b1638]/70 border border-[#00f0ff]/15 rounded-xl p-3 text-center">
+              <div class="text-xl font-bold text-white">12</div>
+              <div class="text-xs text-slate-400 font-medium">Campionati & Coppe</div>
+            </div>
+            <div class="bg-[#0b1638]/70 border border-[#00f0ff]/15 rounded-xl p-3 text-center">
+              <div class="text-xl font-bold text-[#00f0ff]">50.000</div>
+              <div class="text-xs text-slate-400 font-medium">Simulazioni / Match</div>
+            </div>
+            <div class="bg-[#0b1638]/70 border border-[#00f0ff]/15 rounded-xl p-3 text-center">
+              <div class="text-xl font-bold text-white">&lt; 50 ms</div>
+              <div class="text-xs text-slate-400 font-medium">Tempo di Calcolo</div>
+            </div>
+            <div class="bg-[#0b1638]/70 border border-[#00f0ff]/15 rounded-xl p-3 text-center">
+              <div class="text-xl font-bold text-[#38bdf8]">15+</div>
+              <div class="text-xs text-slate-400 font-medium">Mercati Analizzati</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section Title -->
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h2 class="text-2xl font-bold text-white font-['Outfit'] flex items-center gap-2">
+            <i data-lucide="trophy" class="w-6 h-6 text-[#00f0ff]"></i>
+            Seleziona una Competizione
+          </h2>
+          <p class="text-sm text-slate-400">Esplora calendario, classifica, marcatori, dati xG e avvia l'analisi del match.</p>
+        </div>
+      </div>
+
+      <!-- 12 Leagues Cards Grid -->
+      <div id="leagues-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+        <!-- Generato dinamicamente via app.js -->
+        <div class="glass-card p-6 flex items-center justify-center min-h-[160px]">
+          <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-[#00f0ff]"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= VIEW 2: LEAGUE DETAIL VIEW ================= -->
+    <section id="view-league" class="hidden">
+      <!-- Breadcrumb & Back -->
+      <div class="flex items-center gap-3 mb-6">
+        <button onclick="navigateToHome()" class="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 text-sm font-semibold flex items-center gap-2 transition">
+          <i data-lucide="arrow-left" class="w-4 h-4 text-[#00f0ff]"></i>
+          <span>Tutte le Competizioni</span>
+        </button>
+      </div>
+
+      <!-- League Header Banner -->
+      <div class="glass-card p-6 mb-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-[#00f0ff]/20">
+        <div class="flex items-center gap-5">
+          <div id="league-logo-container" class="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#0284c7]/30 to-[#00f0ff]/10 border border-[#00f0ff]/30 p-2 flex items-center justify-center flex-shrink-0 shadow-[0_0_15px_rgba(0,240,255,0.2)]">
+            <i data-lucide="shield" class="w-9 h-9 text-[#00f0ff]"></i>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h1 id="league-title" class="text-2xl sm:text-3xl font-extrabold text-white font-['Outfit']">Campionato</h1>
+              <span id="league-country-badge" class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#034078]/60 text-[#38bdf8] border border-[#00f0ff]/20">Italia</span>
+            </div>
+            <p class="text-sm text-slate-400 mt-1">Stagione Ufficiale 2026/2027 • Database Sincronizzato</p>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-3 self-end sm:self-auto">
+          <button onclick="refreshCurrentLeague()" class="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-slate-300 flex items-center gap-1.5 transition">
+            <i data-lucide="rotate-cw" class="w-3.5 h-3.5 text-[#00f0ff]"></i>
+            Aggiorna
+          </button>
+        </div>
+      </div>
+
+      <!-- 4 Navigation Tabs -->
+      <div class="flex items-center gap-2 border-b border-[#00f0ff]/15 pb-3 mb-8 overflow-x-auto">
+        <button id="tab-calendario" onclick="switchLeagueTab('calendario')" class="nav-tab active">
+          <i data-lucide="calendar" class="w-4 h-4"></i>
+          <span>Calendario & Partite</span>
+        </button>
+        <button id="tab-classifica" onclick="switchLeagueTab('classifica')" class="nav-tab">
+          <i data-lucide="table" class="w-4 h-4"></i>
+          <span>Classifica</span>
+        </button>
+        <button id="tab-marcatori" onclick="switchLeagueTab('marcatori')" class="nav-tab">
+          <i data-lucide="flame" class="w-4 h-4"></i>
+          <span>Classifica Marcatori</span>
+        </button>
+        <button id="tab-xg" onclick="switchLeagueTab('xg')" class="nav-tab">
+          <i data-lucide="bar-chart-3" class="w-4 h-4"></i>
+          <span>Dati xG & Statistiche</span>
+        </button>
+      </div>
+
+      <!-- TAB CONTENT 1: CALENDARIO -->
+      <div id="tab-content-calendario">
+        <!-- Horizontal Matchday Selector -->
+        <div class="mb-6">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs uppercase tracking-wider font-bold text-slate-400">Seleziona Turno / Giornata</span>
+            <span id="matchday-counter" class="text-xs text-[#00f0ff] font-semibold">Giornate Stagione 2026/2027</span>
+          </div>
+          <div id="matchdays-slider" class="matchday-slider">
+            <!-- Generato dinamicamente via app.js -->
+          </div>
+        </div>
+
+        <!-- Matches List Container -->
+        <div id="matches-list-container" class="space-y-4">
+          <!-- Popolato dinamicamente da app.js -->
+        </div>
+      </div>
+
+      <!-- TAB CONTENT 2: CLASSIFICA -->
+      <div id="tab-content-classifica" class="hidden">
+        <div class="glass-card p-4 sm:p-6 overflow-x-auto">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-bold text-white font-['Outfit']">Classifica Generale 2026/2027</h3>
+            <span class="text-xs text-slate-400">Ricalcolata dinamicamente con punti, gol fatti e differenza reti</span>
+          </div>
+          <table class="custom-table">
+            <thead>
+              <tr>
+                <th class="w-12">Pos</th>
+                <th>Squadra</th>
+                <th class="text-center">Forma (U5)</th>
+                <th class="text-center">G</th>
+                <th class="text-center">V</th>
+                <th class="text-center">P</th>
+                <th class="text-center">S</th>
+                <th class="text-center">GF</th>
+                <th class="text-center">GS</th>
+                <th class="text-center">DR</th>
+                <th class="text-right font-bold text-[#00f0ff]">PT</th>
+              </tr>
+            </thead>
+            <tbody id="standings-table-body">
+              <!-- Popolato dinamicamente -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- TAB CONTENT 3: CLASSIFICA MARCATORI -->
+      <div id="tab-content-marcatori" class="hidden">
+        <div class="glass-card p-4 sm:p-6">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-bold text-white font-['Outfit']">Capocannonieri & Assistman</h3>
+            <span class="text-xs text-slate-400">Stagione 2026/2027</span>
+          </div>
+          <div id="scorers-list-container" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <!-- Popolato dinamicamente -->
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB CONTENT 4: DATI XG & STATISTICHE -->
+      <div id="tab-content-xg" class="hidden">
+        <div class="glass-card p-4 sm:p-6">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h3 class="text-lg font-bold text-white font-['Outfit']">Metriche Avanzate & xG Performance</h3>
+              <p class="text-xs text-slate-400">Rating Elo dinamico, xG prodotti medi e concessi per partita</p>
+            </div>
+          </div>
+          <div id="xg-table-container" class="overflow-x-auto">
+            <!-- Popolato dinamicamente -->
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- ================= MODAL / SLIDE-OUT PANEL: ANALISI SIMULAZIONE ================= -->
+  <div id="simulation-modal" class="modal-overlay">
+    <div class="modal-content p-6 sm:p-8">
+      
+      <!-- Modal Header -->
+      <div class="flex items-start justify-between border-b border-[#00f0ff]/15 pb-5 mb-6">
+        <div>
+          <div class="flex items-center gap-2 mb-1">
+            <span class="px-2.5 py-0.5 rounded-full bg-[#0284c7]/20 border border-[#00f0ff]/30 text-[#00f0ff] text-xs font-bold uppercase tracking-wider">
+              Monte Carlo Engine
+            </span>
+            <span id="modal-sim-badge" class="text-xs text-slate-400 font-medium">50.000 iterazioni • Poisson bivariata Dixon-Coles</span>
+          </div>
+          <h2 class="text-2xl font-extrabold text-white font-['Outfit'] flex items-center gap-2">
+            Analisi & Pronostico Statistico
+          </h2>
+        </div>
+        <button onclick="closeSimulationModal()" class="w-9 h-9 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center text-slate-300 hover:text-white transition">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <!-- Match Versus Banner -->
+      <div class="bg-[#0b1638] border border-[#00f0ff]/20 rounded-2xl p-5 mb-6">
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 items-center text-center">
+          
+          <!-- Home Team -->
+          <div class="flex flex-col items-center">
+            <div id="modal-home-logo" class="w-16 h-16 rounded-2xl bg-[#101d42] border border-[#00f0ff]/25 p-2 flex items-center justify-center mb-2 shadow-[0_0_15px_rgba(0,240,255,0.15)]">
+              <i data-lucide="shield" class="w-8 h-8 text-[#00f0ff]"></i>
+            </div>
+            <h3 id="modal-home-name" class="text-lg font-bold text-white font-['Outfit']">Squadra Casa</h3>
+            <div class="text-xs text-slate-400 flex items-center gap-2 mt-1">
+              <span>Elo: <strong id="modal-home-elo" class="text-[#00f0ff]">1800</strong></span>
+              <span>•</span>
+              <span>Attacco: <strong id="modal-home-att" class="text-slate-200">1.25</strong></span>
+            </div>
+            <div id="modal-home-form" class="flex items-center gap-1 mt-2">
+              <!-- Pallini forma -->
+            </div>
+          </div>
+
+          <!-- Center VS & Expected Scores -->
+          <div class="flex flex-col items-center justify-center py-2">
+            <span class="text-xs font-extrabold tracking-widest text-slate-400 uppercase bg-white/5 px-3 py-1 rounded-full border border-white/10 mb-3">VS</span>
+            
+            <div class="bg-[#070d1e] border border-[#00f0ff]/30 rounded-xl px-4 py-2 shadow-[0_0_15px_rgba(0,240,255,0.2)]">
+              <div class="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Punteggio Più Probabile</div>
+              <div id="modal-expected-score" class="text-2xl font-black text-white font-['Outfit'] tracking-wider text-[#00f0ff]">
+                2 - 1
+              </div>
+              <div id="modal-halftime-score" class="text-xs text-slate-400 mt-0.5">
+                (1T: 1 - 0 • 2T: 1 - 1)
+              </div>
+            </div>
+          </div>
+
+          <!-- Away Team -->
+          <div class="flex flex-col items-center">
+            <div id="modal-away-logo" class="w-16 h-16 rounded-2xl bg-[#101d42] border border-[#00f0ff]/25 p-2 flex items-center justify-center mb-2 shadow-[0_0_15px_rgba(0,240,255,0.15)]">
+              <i data-lucide="shield" class="w-8 h-8 text-[#38bdf8]"></i>
+            </div>
+            <h3 id="modal-away-name" class="text-lg font-bold text-white font-['Outfit']">Squadra Ospite</h3>
+            <div class="text-xs text-slate-400 flex items-center gap-2 mt-1">
+              <span>Elo: <strong id="modal-away-elo" class="text-[#38bdf8]">1750</strong></span>
+              <span>•</span>
+              <span>Difesa: <strong id="modal-away-def" class="text-slate-200">0.90</strong></span>
+            </div>
+            <div id="modal-away-form" class="flex items-center gap-1 mt-2">
+              <!-- Pallini forma -->
+            </div>
+          </div>
+
+        </div>
+
+        <!-- 1X2 Win Probabilities Bar -->
+        <div class="mt-6 pt-5 border-t border-[#00f0ff]/15">
+          <div class="flex items-center justify-between text-xs font-semibold mb-1.5">
+            <span class="text-[#00f0ff] flex items-center gap-1.5">
+              <span>1 (Casa):</span>
+              <strong id="prob-1-val">58.4%</strong>
+            </span>
+            <span class="text-[#eab308] flex items-center gap-1.5">
+              <span>X (Pareggio):</span>
+              <strong id="prob-x-val">22.1%</strong>
+            </span>
+            <span class="text-[#ec4899] flex items-center gap-1.5">
+              <span>2 (Ospite):</span>
+              <strong id="prob-2-val">19.5%</strong>
+            </span>
+          </div>
+          
+          <div class="split-prob-bar">
+            <div id="bar-prob-1" class="split-prob-1 transition-all duration-500" style="width: 58.4%"></div>
+            <div id="bar-prob-x" class="split-prob-x transition-all duration-500" style="width: 22.1%"></div>
+            <div id="bar-prob-2" class="split-prob-2 transition-all duration-500" style="width: 19.5%"></div>
+          </div>
+          
+          <div class="flex items-center justify-between text-[11px] text-slate-400 mt-1">
+            <span id="prob-1-count">29.200 / 50.000</span>
+            <span id="prob-x-count">11.050 / 50.000</span>
+            <span id="prob-2-count">9.750 / 50.000</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ================= SEZIONE H2H PRECEDENTI DIRETTI ================= -->
+      <div id="modal-h2h-section" class="bg-[#0b1638] border border-white/10 rounded-2xl p-4 sm:p-5 mb-6">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <h4 class="text-sm font-bold text-white font-['Outfit'] flex items-center gap-2">
+            <i data-lucide="history" class="w-4 h-4 text-[#00f0ff]"></i>
+            Precedenti Diretti Head-to-Head (H2H)
+          </h4>
+          <span id="h2h-summary-badge" class="text-xs px-2.5 py-0.5 rounded-full bg-white/5 border border-white/10 text-[#38bdf8] font-medium font-mono">
+            Ultimi 5 scontri diretti
+          </span>
+        </div>
+        <div id="h2h-matches-list" class="grid grid-cols-1 sm:grid-cols-5 gap-2.5">
+          <!-- Popolato da app.js con le 5 partite -->
+        </div>
+      </div>
+
+      <!-- ================= SEZIONE VALUE BETTING ================= -->
+      <div id="modal-value-bet-section" class="glass-card p-4 sm:p-5 mb-6 border-emerald-500/30 bg-emerald-950/15 relative overflow-hidden">
+        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div class="flex items-center gap-3.5">
+            <div class="w-11 h-11 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center flex-shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.4)]">
+              <i data-lucide="trending-up" class="w-6 h-6 text-[#031326] stroke-[2.5]"></i>
+            </div>
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs uppercase font-extrabold tracking-wider text-emerald-400">Value Bet Consigliata dal Motore</span>
+                <span id="vb-badge-ev" class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30 font-mono">+18.5% EV</span>
+              </div>
+              <h4 id="vb-market-name" class="text-lg font-bold text-white font-['Outfit'] mt-0.5">1X2: 1</h4>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-3 gap-3 bg-[#070d1e]/80 p-2.5 rounded-xl border border-white/10 text-center w-full sm:w-auto">
+            <div class="px-2">
+              <div class="text-[10px] uppercase text-slate-400 font-medium">Quota Banco</div>
+              <div id="vb-odds" class="text-sm font-extrabold text-white font-mono">1.85</div>
+            </div>
+            <div class="px-2 border-x border-white/10">
+              <div class="text-[10px] uppercase text-slate-400 font-medium">Prob. Simulata</div>
+              <div id="vb-prob-sim" class="text-sm font-bold text-[#00f0ff] font-mono">58.4%</div>
+            </div>
+            <div class="px-2">
+              <div class="text-[10px] uppercase text-slate-400 font-medium">Prob. Implicita</div>
+              <div id="vb-prob-imp" class="text-sm font-bold text-slate-300 font-mono">54.1%</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ================= BOX DELL'ASSISTENTE STATISTICO (CONVERGENZA & NARRATIVA) ================= -->
+      <div class="assistant-box mb-8 relative">
+        <div class="flex items-start gap-4">
+          <div class="w-12 h-12 rounded-xl bg-gradient-to-tr from-[#0284c7] to-[#00f0ff] flex items-center justify-center flex-shrink-0 shadow-[0_0_20px_rgba(0,240,255,0.4)]">
+            <i data-lucide="bot" class="w-7 h-7 text-[#031326] stroke-[2.5]"></i>
+          </div>
+          <div class="flex-grow">
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <h4 class="text-base font-bold text-white font-['Outfit'] flex items-center gap-2">
+                Assistente Statistico • Convergenza tra i Mercati
+              </h4>
+              <div class="flex items-center gap-2">
+                <div id="assistant-synergy-badge" class="px-3 py-1 rounded-full bg-[#00f0ff]/15 border border-[#00f0ff]/40 text-[#00f0ff] text-xs font-extrabold tracking-wide flex items-center gap-1.5 shadow-[0_0_12px_rgba(0,240,255,0.3)]">
+                  <i data-lucide="zap" class="w-3.5 h-3.5"></i>
+                  <span id="assistant-top-combo-name">1X + Over 1.5</span>
+                </div>
+                <button id="btn-save-simulation" onclick="saveCurrentSimulation()" class="text-xs px-3 py-1 rounded-lg bg-[#00f0ff]/20 hover:bg-[#00f0ff]/35 text-[#00f0ff] border border-[#00f0ff]/40 transition flex items-center gap-1.5 font-bold shadow-[0_0_10px_rgba(0,240,255,0.2)]">
+                  <i data-lucide="bookmark" class="w-3.5 h-3.5"></i>
+                  <span id="btn-save-text">Salva nello Storico</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Sintesi Narrativa AI (2-3 righe) -->
+            <div class="bg-[#070d1e]/90 border border-[#00f0ff]/30 rounded-xl p-3.5 mb-4 shadow-[0_0_15px_rgba(0,240,255,0.1)]">
+              <div class="text-[11px] uppercase tracking-wider font-extrabold text-[#00f0ff] flex items-center gap-1.5 mb-1.5">
+                <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
+                Sintesi Narrativa dell'Assistente AI (Scenario, Convergenza & Valore)
+              </div>
+              <p id="assistant-narrative-text" class="text-slate-100 text-sm leading-relaxed font-normal">
+                Generazione della sintesi narrativa su 50.000 simulazioni...
+              </p>
+            </div>
+
+            <!-- Spiegazione testuale dettagliata -->
+            <p id="assistant-explanation-text" class="text-slate-300 text-xs leading-relaxed mb-4">
+              Caricamento analisi delle 50.000 simulazioni...
+            </p>
+
+            <!-- Top Synergies Badges -->
+            <div class="border-t border-[#00f0ff]/15 pt-3">
+              <span class="text-xs font-semibold text-slate-400 block mb-2">Top Combinazioni con Massima Sinergia Statistica (Lift):</span>
+              <div id="top-combos-pills" class="flex flex-wrap gap-2">
+                <!-- Generato da app.js -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ================= GRIGLIA COMPLETA DEI 15 MERCATI ================= -->
+      <div class="mb-4 flex items-center justify-between">
+        <h4 class="text-lg font-bold text-white font-['Outfit'] flex items-center gap-2">
+          <i data-lucide="layers" class="w-5 h-5 text-[#00f0ff]"></i>
+          Tutti i Mercati Scommesse (50.000 Simulazioni)
+        </h4>
+        <span class="text-xs text-slate-400">Conteggio esatto e percentuale</span>
+      </div>
+
+      <!-- Filter Tabs for Markets -->
+      <div class="flex items-center gap-2 overflow-x-auto pb-2 mb-5">
+        <button onclick="filterMarketCategory('all')" class="market-filter-btn active px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#00f0ff]/20 text-[#00f0ff] border border-[#00f0ff]/30">Tutti i 15 Mercati</button>
+        <button onclick="filterMarketCategory('1x2_ou')" class="market-filter-btn px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10">1X2 & Over/Under</button>
+        <button onclick="filterMarketCategory('goal_mg')" class="market-filter-btn px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10">Goal & Multigol</button>
+        <button onclick="filterMarketCategory('cards_corners')" class="market-filter-btn px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10">Cartellini & Corner</button>
+        <button onclick="filterMarketCategory('combos')" class="market-filter-btn px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10">Combo & Squadre</button>
+      </div>
+
+      <!-- Markets Container -->
+      <div id="markets-full-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <!-- Popolato dinamicamente via app.js -->
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="mt-8 pt-5 border-t border-[#00f0ff]/15 flex items-center justify-between">
+        <div class="text-xs text-slate-400 flex items-center gap-2">
+          <i data-lucide="cpu" class="w-4 h-4 text-[#00f0ff]"></i>
+          <span>Tempo di calcolo simulazione: <strong id="modal-exec-time" class="text-white">45.2</strong> ms</span>
+        </div>
+        <button onclick="closeSimulationModal()" class="px-5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition">
+          Chiudi
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ================= MODAL: STORICO SIMULAZIONI ================= -->
+  <div id="history-modal" class="modal-overlay">
+    <div class="modal-content p-6 sm:p-8 max-w-4xl">
+      <div class="flex items-center justify-between border-b border-[#00f0ff]/15 pb-4 mb-5">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl bg-[#0284c7]/20 border border-[#00f0ff]/30 flex items-center justify-center text-[#00f0ff]">
+            <i data-lucide="history" class="w-5 h-5"></i>
+          </div>
+          <div>
+            <h3 class="text-xl font-bold text-white font-['Outfit']">Storico Simulazioni & Analisi</h3>
+            <p class="text-xs text-slate-400">Archivio delle simulazioni salvate in SQLite (data.db)</p>
+          </div>
+        </div>
+        <button onclick="closeHistoryModal()" class="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-white transition">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <div id="history-list-container" class="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+        <!-- Popolato dinamicamente da app.js -->
+      </div>
+
+      <div class="mt-5 pt-4 border-t border-white/10 flex items-center justify-between">
+        <span id="history-count-label" class="text-xs text-slate-400">0 analisi salvate</span>
+        <button onclick="closeHistoryModal()" class="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-semibold text-slate-200 transition">
+          Chiudi
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= FOOTER ================= -->
+  <footer class="mt-auto border-t border-[#00f0ff]/15 bg-[#050a18] py-6 text-center text-xs text-slate-400">
+    <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <div class="flex items-center gap-2">
+        <span class="font-bold text-white font-['Outfit']">SportMeridian Predictor</span>
+        <span>•</span>
+        <span>Stagione 2026/2027</span>
+      </div>
+      <div>
+        Motore di Simulazione Monte Carlo Vettorializzato su NumPy & Poisson Bivariata Dixon-Coles
+      </div>
+    </div>
+  </footer>
+
+  <!-- Application Logic -->
+  <script src="/static/app.js"></script>
+</body>
+</html>
