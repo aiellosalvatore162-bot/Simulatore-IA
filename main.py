@@ -51,6 +51,7 @@ class TeamInput(BaseModel):
     elo: Optional[float] = Field(None, description="Rating Elo della squadra", ge=800.0, le=2400.0, examples=[1835.0])
     cards_factor: Optional[float] = Field(None, description="Fattore propensione cartellini", ge=0.2, le=2.5, examples=[0.95])
     corners_factor: Optional[float] = Field(None, description="Fattore propensione corner", ge=0.2, le=2.5, examples=[1.25])
+    recent_form: Optional[str] = Field(None, description="Forma recente W-D-L, ultime cinque partite", examples=["W-D-W-D-L"])
     xg_for: Optional[float] = Field(None, description="xG medi fatti inseriti dall'utente", ge=0.0, le=10.0)
     xg_against: Optional[float] = Field(None, description="xG medi subiti inseriti dall'utente", ge=0.0, le=10.0)
 
@@ -357,6 +358,8 @@ def _resolve_team_params(
             cards_factor = explicit_input.cards_factor
         if explicit_input.corners_factor is not None:
             corners_factor = explicit_input.corners_factor
+        if explicit_input.recent_form is not None:
+            recent_form = explicit_input.recent_form
         if explicit_input.xg_for is not None:
             xg_for = explicit_input.xg_for
         if explicit_input.xg_against is not None:

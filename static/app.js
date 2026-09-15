@@ -499,6 +499,10 @@ async function openAnalysis(matchId, homeTeamId, awayTeamId) {
   return;
 }
 
+function openManualAnalysis() {
+  openAnalysis(null, null, null);
+}
+
 const quoteMarketGroups = [
   ['1x2_finale', '1X2 Finale', ['1', 'X', '2']],
   ['1x2_primo_tempo', '1X2 Primo Tempo', ['1', 'X', '2']],
@@ -518,18 +522,38 @@ const quoteMarketGroups = [
 function renderAnalysisSetup(matchId, homeId, awayId, home, away) {
   const panel = document.getElementById('analysis-setup-panel');
   if (!panel) return;
-  const xgValue = (team, field) => team.xg_source && team.xg_source !== 'not_available' ? Number(team[field]).toFixed(2) : '';
+  const isManual = !homeId && !awayId && !matchId;
+  const value = (team, field, fallback = '') => {
+    if (team[field] === undefined || team[field] === null || team[field] === '') return fallback;
+    return typeof team[field] === 'number' ? team[field].toFixed(2) : team[field];
+  };
+  const xgValue = (team, field) => Number.isFinite(Number(team[field])) ? Number(team[field]).toFixed(2) : '';
+  const teamFields = (side, team, defaultName, defaultForm) => `
+    <div class="bg-[#070d1e] rounded-xl p-3 border border-white/10">
+      <strong class="text-white">${side === 'home' ? 'Team 1 (casa)' : 'Team 2 (ospite)'}</strong>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+        <label class="text-[11px] text-slate-400 sm:col-span-2">Nome squadra<input id="analysis-${side}-name" type="text" value="${value(team, 'name', defaultName)}" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label>
+        <label class="text-[11px] text-slate-400">Attacco<input id="analysis-${side}-attack" type="number" min="0.2" max="3" step="0.01" value="${value(team, 'attack', '1.00')}" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label>
+        <label class="text-[11px] text-slate-400">Difesa<input id="analysis-${side}-defense" type="number" min="0.2" max="3" step="0.01" value="${value(team, 'defense', '1.00')}" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label>
+        <label class="text-[11px] text-slate-400">Valore Elo<input id="analysis-${side}-elo" type="number" min="800" max="2400" step="1" value="${value(team, 'elo', '1500')}" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label>
+        <label class="text-[11px] text-slate-400">Forma (W-D-L)<input id="analysis-${side}-form" type="text" value="${value(team, 'recent_form', defaultForm)}" placeholder="W-D-W-D-L" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label>
+        <label class="text-[11px] text-slate-400">Fattore cartellini<input id="analysis-${side}-cards" type="number" min="0.2" max="2.5" step="0.01" value="${value(team, 'cards_factor', '1.00')}" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label>
+        <label class="text-[11px] text-slate-400">Fattore corner<input id="analysis-${side}-corners" type="number" min="0.2" max="2.5" step="0.01" value="${value(team, 'corners_factor', '1.00')}" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label>
+        <label class="text-[11px] text-slate-400">xG fatti<input id="analysis-${side}-xg-for" type="number" min="0" max="10" step="0.01" value="${xgValue(team, 'xg_for')}" placeholder="es. 1.55" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label>
+        <label class="text-[11px] text-slate-400">xG subiti<input id="analysis-${side}-xg-against" type="number" min="0" max="10" step="0.01" value="${xgValue(team, 'xg_against')}" placeholder="es. 1.10" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label>
+      </div>
+    </div>`;
   panel.innerHTML = `
     <div class="flex items-start justify-between gap-4 mb-4">
       <div>
-        <h3 class="text-lg font-bold text-white">Prepara analisi</h3>
-        <p class="text-xs text-slate-400">Inserisci obbligatoriamente gli xG fatti e subiti di entrambe le squadre. Le quote bookmaker sono facoltative.</p>
+        <h3 class="text-lg font-bold text-white">${isManual ? 'Crea partita manuale' : 'Prepara analisi'}</h3>
+        <p class="text-xs text-slate-400">Puoi modificare per questa simulazione Elo, xG fatti e xG subiti di entrambe le squadre. Le quote bookmaker sono facoltative.</p>
       </div>
       <button onclick="runPreparedAnalysis(${matchId || 'null'}, ${homeId || 'null'}, ${awayId || 'null'})" class="glow-btn text-xs py-2 px-4">Avvia analisi</button>
     </div>
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5 text-xs">
-      <div class="bg-[#070d1e] rounded-xl p-3 border border-white/10"><strong class="text-white">${home.name || 'Casa'}</strong><br>Forma: ${home.recent_form || 'N/D'}<div class="grid grid-cols-2 gap-2 mt-2"><label class="text-[11px] text-slate-400">xG fatti<input id="analysis-home-xg-for" type="number" min="0" max="10" step="0.01" value="${xgValue(home, 'xg_for')}" placeholder="es. 1.55" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label><label class="text-[11px] text-slate-400">xG subiti<input id="analysis-home-xg-against" type="number" min="0" max="10" step="0.01" value="${xgValue(home, 'xg_against')}" placeholder="es. 1.10" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label></div></div>
-      <div class="bg-[#070d1e] rounded-xl p-3 border border-white/10"><strong class="text-white">${away.name || 'Ospite'}</strong><br>Forma: ${away.recent_form || 'N/D'}<div class="grid grid-cols-2 gap-2 mt-2"><label class="text-[11px] text-slate-400">xG fatti<input id="analysis-away-xg-for" type="number" min="0" max="10" step="0.01" value="${xgValue(away, 'xg_for')}" placeholder="es. 1.35" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label><label class="text-[11px] text-slate-400">xG subiti<input id="analysis-away-xg-against" type="number" min="0" max="10" step="0.01" value="${xgValue(away, 'xg_against')}" placeholder="es. 1.25" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label></div></div>
+      ${teamFields('home', home, 'Team 1', 'D-D-D-D-D')}
+      ${teamFields('away', away, 'Team 2', 'D-D-D-D-D')}
     </div>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
       ${quoteMarketGroups.map(([category, title, keys]) => `<div class="bg-[#070d1e] rounded-xl p-3 border border-white/10"><h4 class="text-xs font-bold text-[#00f0ff] mb-2">${title}</h4><div class="grid grid-cols-2 gap-2">${keys.map(key => `<label class="text-[11px] text-slate-400">${key.replaceAll('_', '-')}<input data-odds-key="${category}:${key}" type="number" min="1.01" step="0.01" placeholder="Quota" class="w-full mt-1 rounded-lg bg-white/5 border border-white/10 px-2 py-1.5 text-white"></label>`).join('')}</div></div>`).join('')}
@@ -545,6 +569,7 @@ async function runPreparedAnalysis(matchId, homeTeamId, awayTeamId) {
     const value = document.getElementById(id)?.value;
     return value === '' || value === undefined ? null : Number(value);
   };
+  const textOrDefault = (id, fallback) => document.getElementById(id)?.value.trim() || fallback;
   const xgFields = [
     ['analysis-home-xg-for', 'xG fatti casa'],
     ['analysis-home-xg-against', 'xG subiti casa'],
@@ -579,8 +604,28 @@ async function runPreparedAnalysis(matchId, homeTeamId, awayTeamId) {
         n_simulations: 50000,
         custom_odds: customOdds,
         require_xg: true,
-        home_team: { xg_for: numberOrNull('analysis-home-xg-for'), xg_against: numberOrNull('analysis-home-xg-against') },
-        away_team: { xg_for: numberOrNull('analysis-away-xg-for'), xg_against: numberOrNull('analysis-away-xg-against') },
+        home_team: {
+          name: textOrDefault('analysis-home-name', 'Team 1'),
+          attack: numberOrNull('analysis-home-attack'),
+          defense: numberOrNull('analysis-home-defense'),
+          elo: numberOrNull('analysis-home-elo'),
+          recent_form: textOrDefault('analysis-home-form', 'D-D-D-D-D'),
+          cards_factor: numberOrNull('analysis-home-cards'),
+          corners_factor: numberOrNull('analysis-home-corners'),
+          xg_for: numberOrNull('analysis-home-xg-for'),
+          xg_against: numberOrNull('analysis-home-xg-against'),
+        },
+        away_team: {
+          name: textOrDefault('analysis-away-name', 'Team 2'),
+          attack: numberOrNull('analysis-away-attack'),
+          defense: numberOrNull('analysis-away-defense'),
+          elo: numberOrNull('analysis-away-elo'),
+          recent_form: textOrDefault('analysis-away-form', 'D-D-D-D-D'),
+          cards_factor: numberOrNull('analysis-away-cards'),
+          corners_factor: numberOrNull('analysis-away-corners'),
+          xg_for: numberOrNull('analysis-away-xg-for'),
+          xg_against: numberOrNull('analysis-away-xg-against'),
+        },
       }),
     });
     if (!res.ok) throw new Error("Errore chiamata simulazione");
