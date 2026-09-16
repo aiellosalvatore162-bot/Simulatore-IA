@@ -33,7 +33,7 @@ class MatchConfig:
     base_goals_home: float = 1.38
     base_goals_away: float = 1.12
     dixon_coles_rho: float = -0.11
-    n_simulations: int = 50_000
+    n_simulations: int = 50000
     seed: int | None = None
 
 

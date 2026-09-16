@@ -561,24 +561,39 @@ function renderAnalysisSetup(matchId, homeId, awayId, home, away) {
 }
 
 async function runPreparedAnalysis(matchId, homeTeamId, awayTeamId) {
+  // Parser robusto: gestisce virgola decimale, spazi e valori non numerici
+  const parseNumber = (raw) => {
+    if (raw === undefined || raw === null) return null;
+    const cleaned = String(raw).trim().replace(',', '.');
+    if (cleaned === '') return null;
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : null;   // NaN diventa null, non passa più
+  };
+
   const customOdds = {};
   document.querySelectorAll('[data-odds-key]').forEach(input => {
-    if (input.value && Number(input.value) > 1) customOdds[input.dataset.oddsKey] = Number(input.value);
+    const q = parseNumber(input.value);
+    if (q !== null && q > 1) customOdds[input.dataset.oddsKey] = q;
   });
-  const numberOrNull = id => {
-    const value = document.getElementById(id)?.value;
-    return value === '' || value === undefined ? null : Number(value);
-  };
+
+  const numberOrNull = id => parseNumber(document.getElementById(id)?.value);
   const textOrDefault = (id, fallback) => document.getElementById(id)?.value.trim() || fallback;
+
   const xgFields = [
     ['analysis-home-xg-for', 'xG fatti casa'],
     ['analysis-home-xg-against', 'xG subiti casa'],
     ['analysis-away-xg-for', 'xG fatti ospite'],
     ['analysis-away-xg-against', 'xG subiti ospite'],
   ];
-  const missingXg = xgFields.filter(([id]) => numberOrNull(id) === null).map(([, label]) => label);
-  if (missingXg.length > 0) {
-    document.getElementById('assistant-explanation-text').innerText = `Per rendere l'analisi basata sugli xG devi compilare: ${missingXg.join(', ')}.`;
+  const filledXg = xgFields.filter(([id]) => numberOrNull(id) !== null);
+  // xG opzionali: si richiedono tutti e quattro solo se l'utente ne ha compilato almeno uno
+  const requireXg = filledXg.length > 0;
+  if (requireXg && filledXg.length < xgFields.length) {
+    const missingXg = xgFields
+      .filter(([id]) => numberOrNull(id) === null)
+      .map(([, label]) => label);
+    document.getElementById('assistant-explanation-text').innerText =
+      `Per rendere l'analisi basata sugli xG devi compilare: ${missingXg.join(', ')}.`;
     return;
   }
 
@@ -590,7 +605,7 @@ async function runPreparedAnalysis(matchId, homeTeamId, awayTeamId) {
     <div class="col-span-2 p-12 text-center">
       <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-[#00f0ff] mx-auto mb-3"></div>
       <span class="text-xs text-slate-400">Elaborazione 50.000 partite con modello Dixon-Coles...</span>
-    </div>
+    </div>`;
   `;
 
   try {
@@ -602,8 +617,8 @@ async function runPreparedAnalysis(matchId, homeTeamId, awayTeamId) {
         home_team_id: homeTeamId,
         away_team_id: awayTeamId,
         n_simulations: 50000,
-        custom_odds: customOdds,
-        require_xg: true,
+        custom_odds: Object.keys(customOdds).length ? customOdds : undefined,
+        require_xg: requireXg,
         home_team: {
           name: textOrDefault('analysis-home-name', 'Team 1'),
           attack: numberOrNull('analysis-home-attack'),
