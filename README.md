@@ -1,4 +1,4 @@
-# Simulatore Pronostici Calcistici - Architettura FastAPI & Monte Carlo Dixon-Coles (2026/2027)
+# Simulatore Pronostici Calcistici - Streamlit & Monte Carlo Dixon-Coles (2026/2027)
 
 Motore di pronostici calcistici basato su:
 - **Simulazione Monte Carlo vettorializzata (NumPy)** a **50.000 iterazioni**.
@@ -9,7 +9,7 @@ Motore di pronostici calcistici basato su:
 
 ---
 
-## 🚀 Avvio Rapido
+## Avvio Rapido
 
 ### 1. Installazione dipendenze
 ```bash
@@ -62,12 +62,15 @@ la risposta riporterà `source: "SofaScore"`. SofaScore non offre un contratto A
 pubblico stabile: se restituisce HTTP 403 o cambia gli endpoint, la competizione
 viene segnalata in `errors` e non vengono inseriti dati inventati.
 
-### 3. Avvio del server FastAPI
+### 3. Avvio dell'applicazione Streamlit
 ```bash
-uvicorn main:app --reload --host 127.0.0.1 --port 8000
+streamlit run streamlit_app.py
 ```
-- **Documentazione Swagger interattiva**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-- **Health check**: [http://127.0.0.1:8000/api/health](http://127.0.0.1:8000/api/health)
+
+L'interfaccia consente di inserire i parametri delle due squadre, eseguire la
+simulazione e consultare tabelle e grafici per tutti i mercati. Le quote
+bookmaker sono facoltative: se lasciate vuote, la simulazione viene comunque
+eseguita e il value betting viene semplicemente omesso.
 
 ---
 
@@ -133,7 +136,7 @@ curl -X POST "http://127.0.0.1:8000/api/matches/12/complete" \
 
 ---
 
-## 📊 I 15 Mercati Calcolati
+## 📊 I 16 Mercati Calcolati
 
 Per ciascun mercato vengono restituiti sia `count` esatto su 50.000 simulazioni che `percentage`:
 1. **1X2 finale** (`1`, `X`, `2`)
@@ -144,13 +147,14 @@ Per ciascun mercato vengono restituiti sia `count` esatto su 50.000 simulazioni 
 6. **Goal / No Goal primo tempo** (`Goal`, `No_Goal`)
 7. **Cartellini**: media attesa, Over/Under (3.5, 4.5, 5.5) e fasce (`0-3`, `4-5`, `6+`)
 8. **Calci d'angolo**: media attesa, Over/Under (8.5, 9.5, 10.5, 11.5) e fasce (`0-8`, `9-11`, `12+`)
-9. **Multigol partita** da 0-1 a 3-6
-10. **Multigol casa** da 0-1 a 3-6
-11. **Multigol ospite** da 0-1 a 3-6
-12. **Multigol casa + Multigol ospite** (es. `Casa_1_2_e_Ospite_0_1`, ecc.)
-13. **Multigol 1° tempo + Multigol 2° tempo** (es. `1T_0_1_e_2T_1_2`, ecc.)
-14. **Over squadra casa** da 0.5 a 3.5
-15. **Over squadra ospite** da 0.5 a 3.5
+9. **Falli**: media attesa e Over/Under (19.5, 24.5, 29.5)
+10. **Multigol partita** da 0-1 a 3-6
+11. **Multigol casa** da 0-1 a 3-6
+12. **Multigol ospite** da 0-1 a 3-6
+13. **Multigol casa + Multigol ospite** (es. `Casa_1_2_e_Ospite_0_1`, ecc.)
+14. **Multigol 1° tempo + Multigol 2° tempo** (es. `1T_0_1_e_2T_1_2`, ecc.)
+15. **Over squadra casa** da 0.5 a 3.5
+16. **Over squadra ospite** da 0.5 a 3.5
 
 ---
 

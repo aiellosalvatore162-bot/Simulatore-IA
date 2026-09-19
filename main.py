@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, Query, Path as FPath
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 import database
 import data_sync
@@ -69,8 +69,21 @@ class SimulationPayload(BaseModel):
     n_simulations: int = Field(50_000, description="Numero esatto di simulazioni Monte Carlo", ge=1000, le=100_000)
     seed: Optional[int] = Field(None, description="Seed opzionale per riproducibilità")
     auto_save_history: bool = Field(False, description="Salva automaticamente la simulazione nello storico")
-    custom_odds: Optional[Dict[str, float]] = Field(None, description="Quote reali inserite dall'utente; {} esegue la simulazione senza Value Bet")
+    custom_odds: Optional[Dict[str, Optional[float]]] = Field(None, description="Quote reali opzionali; i valori vuoti vengono ignorati")
     require_xg: bool = Field(False, description="Richiede xG fatti e subiti per entrambe le squadre")
+
+    @field_validator("custom_odds", mode="before")
+    @classmethod
+    def normalize_custom_odds(cls, value: Any) -> Optional[Dict[str, Optional[float]]]:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            return value
+        return {
+            key: raw_value
+            for key, raw_value in value.items()
+            if raw_value is not None and not (isinstance(raw_value, str) and not raw_value.strip())
+        }
 
 
 class SaveHistoryPayload(BaseModel):

@@ -112,6 +112,23 @@ def test_api_simulate_with_database():
     assert "best_synergy_market" in data["market_convergence"]
 
 
+def test_api_simulate_ignores_empty_bookmaker_odds():
+    """Le quote vuote non devono causare 422 né impedire la simulazione."""
+    response = client.post("/api/simulate", json={
+        "n_simulations": 1_000,
+        "custom_odds": {
+            "1x2_finale:1": "",
+            "over_under_finale:Over_2.5": None,
+        },
+    })
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["market_odds"] == {}
+    assert data["value_betting"]["best_value_bet"] is None
+    assert len(data["markets"]) == 15
+
+
 def test_api_simulate_get_endpoint():
     """Verifica endpoint GET /api/simulate."""
     inter = [t for t in database.get_teams_by_league(1) if t["name"] == "Inter"][0]

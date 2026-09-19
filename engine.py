@@ -6,6 +6,7 @@ Esegue esattamente 50.000 simulazioni vettorializzate con NumPy.
 
 from dataclasses import dataclass
 import math
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
@@ -35,6 +36,15 @@ class MatchConfig:
     dixon_coles_rho: float = -0.11
     n_simulations: int = 50000
     seed: int | None = None
+    home_momentum: float = 5.0
+    away_momentum: float = 5.0
+    home_absence_impact: float = 0.0
+    away_absence_impact: float = 0.0
+    home_stakes_multiplier: float = 1.0
+    away_stakes_multiplier: float = 1.0
+    referee_yellow_avg: float = 4.5
+    referee_red_avg: float = 0.15
+    referee_fouls_avg: float = 24.0
 
 
 def calculate_team_strength(team: TeamParams) -> float:
@@ -77,6 +87,16 @@ def calculate_expected_goals(config: MatchConfig) -> Tuple[float, float]:
     home_form = form_multiplier(config.home_team.recent_form)
     away_form = form_multiplier(config.away_team.recent_form)
 
+    def momentum_multiplier(value: float) -> float:
+        return float(np.clip(0.94 + np.clip(value, 0.0, 10.0) * 0.012, 0.94, 1.06))
+
+    home_momentum = momentum_multiplier(config.home_momentum)
+    away_momentum = momentum_multiplier(config.away_momentum)
+    home_availability = 1.0 - 0.18 * float(np.clip(config.home_absence_impact, 0.0, 1.0))
+    away_availability = 1.0 - 0.18 * float(np.clip(config.away_absence_impact, 0.0, 1.0))
+    home_stakes = float(np.clip(config.home_stakes_multiplier, 0.90, 1.10))
+    away_stakes = float(np.clip(config.away_stakes_multiplier, 0.90, 1.10))
+
     # Calcolo differenziale Elo
     delta_elo = config.home_team.elo - config.away_team.elo
     # Moltiplicatore Elo con scala logistica/esponenziale smussata
@@ -96,6 +116,10 @@ def calculate_expected_goals(config: MatchConfig) -> Tuple[float, float]:
         * elo_mult_home
         * home_form
         * (2.0 - away_form)
+        * home_momentum
+        * home_availability
+        * home_stakes
+        * (1.0 + 0.10 * float(np.clip(config.away_absence_impact, 0.0, 1.0)))
     )
 
     model_mu = (
@@ -105,6 +129,10 @@ def calculate_expected_goals(config: MatchConfig) -> Tuple[float, float]:
         * elo_mult_away
         * away_form
         * (2.0 - home_form)
+        * away_momentum
+        * away_availability
+        * away_stakes
+        * (1.0 + 0.10 * float(np.clip(config.home_absence_impact, 0.0, 1.0)))
     )
 
     # Gli xG inseriti descrivono il rendimento stagionale: quando disponibili,
@@ -352,17 +380,26 @@ def simulate_match(config: MatchConfig) -> Dict[str, Any]:
     away_2h = away_ft - away_ht
     total_2h = home_2h + away_2h
 
-    # 5. Simulazione Cartellini e Corner
+    # 5. Simulazione Cartellini, Corner e Falli
     # Cartellini: base 4.4, influenzati da bilanciamento Elo e propensioni
     elo_gap = abs(config.home_team.elo - config.away_team.elo)
     tension_factor = 1.0 + max(0.0, (100.0 - min(elo_gap, 100.0)) / 400.0) # più tesa se Elo simile
-    exp_cards = 4.4 * ((config.home_team.cards_factor + config.away_team.cards_factor) / 2.0) * tension_factor
+    referee_yellow_factor = float(np.clip(config.referee_yellow_avg / 4.5, 0.5, 2.5))
+    referee_red_factor = 1.0 + float(np.clip(config.referee_red_avg, 0.0, 1.0)) * 0.20
+    intensity_factor = (config.home_stakes_multiplier + config.away_stakes_multiplier) / 2.0
+    exp_cards = 4.4 * ((config.home_team.cards_factor + config.away_team.cards_factor) / 2.0) * tension_factor * referee_yellow_factor * referee_red_factor * intensity_factor
+    exp_cards = max(1.0, min(22.0, exp_cards))
     cards = np.random.poisson(lam=exp_cards, size=n_sims)
 
     # Corner: base 9.8, influenzati da volume offensivo (lambda + mu)
-    exp_corners = 9.8 * ((lambda_ + mu) / 2.5) * ((config.home_team.corners_factor + config.away_team.corners_factor) / 2.0)
-    exp_corners = max(5.0, min(16.0, exp_corners))
+    exp_corners = 9.8 * ((lambda_ + mu) / 2.5) * ((config.home_team.corners_factor + config.away_team.corners_factor) / 2.0) * intensity_factor
+    exp_corners = max(5.0, exp_corners)
     corners = np.random.poisson(lam=exp_corners, size=n_sims)
+
+    # Falli: stima indipendente ma coerente con intensità e propensione ai cartellini.
+    exp_fouls = config.referee_fouls_avg * ((config.home_team.cards_factor + config.away_team.cards_factor) / 2.0) * tension_factor * intensity_factor
+    exp_fouls = max(12.0, min(45.0, exp_fouls))
+    fouls = np.random.poisson(lam=exp_fouls, size=n_sims)
 
     # 6. CALCOLO DEI 15 MERCATI RICHIESTI
 
@@ -434,6 +471,17 @@ def simulate_match(config: MatchConfig) -> Dict[str, Any]:
         "fascia_0_8": _calc_stat(corners <= 8, n_sims),
         "fascia_9_11": _calc_stat((corners >= 9) & (corners <= 11), n_sims),
         "fascia_12_plus": _calc_stat(corners >= 12, n_sims),
+    }
+
+    # 6.9 Falli totali (stima dinamica per ogni simulazione)
+    m_fouls = {
+        "expected_mean": round(float(np.mean(fouls)), 2),
+        "Over_19.5": _calc_stat(fouls > 19.5, n_sims),
+        "Under_19.5": _calc_stat(fouls < 19.5, n_sims),
+        "Over_24.5": _calc_stat(fouls > 24.5, n_sims),
+        "Under_24.5": _calc_stat(fouls < 24.5, n_sims),
+        "Over_29.5": _calc_stat(fouls > 29.5, n_sims),
+        "Under_29.5": _calc_stat(fouls < 29.5, n_sims),
     }
 
     # Helper per calcolo multigol su un vettore di gol
@@ -516,7 +564,7 @@ def simulate_match(config: MatchConfig) -> Dict[str, Any]:
         m_over_away[f"Over_{t}"] = _calc_stat(away_ft > t, n_sims)
         m_over_away[f"Under_{t}"] = _calc_stat(away_ft < t, n_sims)
 
-def calculate_value_bets(markets: Dict[str, Any], odds_dict: Dict[str, float]) -> Dict[str, Any]:
+def calculate_value_bets(markets: Dict[str, Any], odds_dict: Optional[Dict[str, Optional[float]]] = None) -> Dict[str, Any]:
     """
     Confronta la percentuale d'uscita delle 50.000 simulazioni con la quota del bookmaker.
     Calcola Expected Value: EV = (P_simulata * Quota) - 1.
@@ -524,8 +572,21 @@ def calculate_value_bets(markets: Dict[str, Any], odds_dict: Dict[str, float]) -
     Individua il mercato con la miglior Value Bet e margine di scostamento.
     """
     candidates = []
+    odds_dict = odds_dict or {}
 
-    def add_candidate(category: str, market_key: str, quota: float) -> None:
+    def parse_odds(raw_odds: Any) -> Optional[float]:
+        if raw_odds is None or (isinstance(raw_odds, str) and not raw_odds.strip()):
+            return None
+        try:
+            quota = float(raw_odds)
+        except (TypeError, ValueError):
+            return None
+        return quota if math.isfinite(quota) else None
+
+    def add_candidate(category: str, market_key: str, raw_quota: Any) -> None:
+        quota = parse_odds(raw_quota)
+        if quota is None:
+            return
         stat = markets.get(category, {}).get(market_key)
         if not stat or quota <= 1.0:
             return
@@ -553,7 +614,9 @@ def calculate_value_bets(markets: Dict[str, Any], odds_dict: Dict[str, float]) -
     # Compatibilita con le quote storiche piatte del motore.
     for sign in ["1", "X", "2"]:
         if sign in odds_dict and sign in markets.get("1x2_finale", {}):
-            quota = float(odds_dict[sign])
+            quota = parse_odds(odds_dict[sign])
+            if quota is None or quota <= 1.0:
+                continue
             p_sim = float(markets["1x2_finale"][sign]["percentage"]) / 100.0
             p_imp = 1.0 / quota if quota > 0 else 1.0
             ev = (p_sim * quota) - 1.0
@@ -573,7 +636,9 @@ def calculate_value_bets(markets: Dict[str, Any], odds_dict: Dict[str, float]) -
     # Over / Under 2.5
     for ou in ["Over_2.5", "Under_2.5"]:
         if ou in odds_dict and ou in markets.get("over_under_finale", {}):
-            quota = float(odds_dict[ou])
+            quota = parse_odds(odds_dict[ou])
+            if quota is None or quota <= 1.0:
+                continue
             p_sim = float(markets["over_under_finale"][ou]["percentage"]) / 100.0
             p_imp = 1.0 / quota if quota > 0 else 1.0
             ev = (p_sim * quota) - 1.0
@@ -593,7 +658,9 @@ def calculate_value_bets(markets: Dict[str, Any], odds_dict: Dict[str, float]) -
     # Goal / No Goal
     for gg in ["Goal", "No_Goal"]:
         if gg in odds_dict and gg in markets.get("goal_nogoal_finale", {}):
-            quota = float(odds_dict[gg])
+            quota = parse_odds(odds_dict[gg])
+            if quota is None or quota <= 1.0:
+                continue
             p_sim = float(markets["goal_nogoal_finale"][gg]["percentage"]) / 100.0
             p_imp = 1.0 / quota if quota > 0 else 1.0
             ev = (p_sim * quota) - 1.0
@@ -618,6 +685,48 @@ def calculate_value_bets(markets: Dict[str, Any], odds_dict: Dict[str, float]) -
         "best_value_bet": best_value,
         "all_value_bets": candidates,
         "positive_ev_count": len([c for c in candidates if c["ev_pct"] > 0])
+    }
+
+
+def validate_value_bets_against_score(
+    value_betting: Dict[str, Any], predicted_home: int, predicted_away: int
+) -> Dict[str, Any]:
+    """Rimuove consigli incompatibili con la scoreline modale della simulazione."""
+    total_goals = predicted_home + predicted_away
+
+    def compatible(candidate: Dict[str, Any]) -> bool:
+        category = str(candidate.get("category", "")).lower()
+        sign = str(candidate.get("sign", ""))
+        if category in {"1x2_finale", "1x2"}:
+            expected = "X" if predicted_home == predicted_away else ("1" if predicted_home > predicted_away else "2")
+            return sign == expected
+        if category in {"over_under_finale", "over/under"}:
+            match = re.search(r"(Over|Under)_(\d+(?:\.\d+)?)", sign, re.IGNORECASE)
+            if match:
+                threshold = float(match.group(2))
+                return total_goals > threshold if match.group(1).lower() == "over" else total_goals < threshold
+        if category == "goal_nogoal_finale":
+            return sign == ("Goal" if predicted_home > 0 and predicted_away > 0 else "No_Goal")
+        if category in {"over_under_squadra_casa", "over_under_squadra_ospite"}:
+            goals = predicted_home if "casa" in category else predicted_away
+            match = re.search(r"(Over|Under)_(\d+(?:\.\d+)?)", sign, re.IGNORECASE)
+            if match:
+                threshold = float(match.group(2))
+                return goals > threshold if match.group(1).lower() == "over" else goals < threshold
+        if category in {"multigol_partita", "multigol_casa", "multigol_ospite"}:
+            values = re.search(r"(\d+)_(\d+)", sign)
+            if values:
+                goals = total_goals if category == "multigol_partita" else (predicted_home if category == "multigol_casa" else predicted_away)
+                return int(values.group(1)) <= goals <= int(values.group(2))
+        return True
+
+    candidates = [candidate for candidate in value_betting.get("all_value_bets", []) if compatible(candidate)]
+    candidates.sort(key=lambda item: item.get("ev_pct", 0), reverse=True)
+    return {
+        **value_betting,
+        "best_value_bet": candidates[0] if candidates else None,
+        "all_value_bets": candidates,
+        "positive_ev_count": sum(candidate.get("ev_pct", 0) > 0 for candidate in candidates),
     }
 
 
@@ -662,7 +771,7 @@ def generate_ai_narrative(
     return f"{riga1} {riga2} {riga3}"
 
 
-def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional[float]]] = None) -> Dict[str, Any]:
     """
     Esegue la simulazione completa di 50.000 partite con NumPy vettorializzato.
     Restituisce tutti i 15 mercati in percentuale e conteggio esatto,
@@ -705,12 +814,21 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, float]] 
     # 5. Simulazione Cartellini e Corner
     elo_gap = abs(config.home_team.elo - config.away_team.elo)
     tension_factor = 1.0 + max(0.0, (100.0 - min(elo_gap, 100.0)) / 400.0)
-    exp_cards = 4.4 * ((config.home_team.cards_factor + config.away_team.cards_factor) / 2.0) * tension_factor
+    referee_yellow_factor = float(np.clip(config.referee_yellow_avg / 4.5, 0.5, 2.5))
+    referee_red_factor = 1.0 + float(np.clip(config.referee_red_avg, 0.0, 1.0)) * 0.20
+    intensity_factor = (config.home_stakes_multiplier + config.away_stakes_multiplier) / 2.0
+    exp_cards = 4.4 * ((config.home_team.cards_factor + config.away_team.cards_factor) / 2.0) * tension_factor * referee_yellow_factor * referee_red_factor * intensity_factor
+    exp_cards = max(1.0, min(22.0, exp_cards))
     cards = np.random.poisson(lam=exp_cards, size=n_sims)
 
-    exp_corners = 9.8 * ((lambda_ + mu) / 2.5) * ((config.home_team.corners_factor + config.away_team.corners_factor) / 2.0)
-    exp_corners = max(5.0, min(16.0, exp_corners))
+    exp_corners = 9.8 * ((lambda_ + mu) / 2.5) * ((config.home_team.corners_factor + config.away_team.corners_factor) / 2.0) * intensity_factor
+    exp_corners = max(5.0, exp_corners)
     corners = np.random.poisson(lam=exp_corners, size=n_sims)
+
+    # Falli: stima dinamica coerente con intensità e propensione ai cartellini.
+    exp_fouls = config.referee_fouls_avg * ((config.home_team.cards_factor + config.away_team.cards_factor) / 2.0) * tension_factor * intensity_factor
+    exp_fouls = max(12.0, min(45.0, exp_fouls))
+    fouls = np.random.poisson(lam=exp_fouls, size=n_sims)
 
     # 6. CALCOLO DEI 15 MERCATI RICHIESTI
     m_1x2_ft = {
@@ -773,6 +891,16 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, float]] 
         "fascia_0_8": _calc_stat(corners <= 8, n_sims),
         "fascia_9_11": _calc_stat((corners >= 9) & (corners <= 11), n_sims),
         "fascia_12_plus": _calc_stat(corners >= 12, n_sims),
+    }
+
+    m_fouls = {
+        "expected_mean": round(float(np.mean(fouls)), 2),
+        "Over_19.5": _calc_stat(fouls > 19.5, n_sims),
+        "Under_19.5": _calc_stat(fouls < 19.5, n_sims),
+        "Over_24.5": _calc_stat(fouls > 24.5, n_sims),
+        "Under_24.5": _calc_stat(fouls < 24.5, n_sims),
+        "Over_29.5": _calc_stat(fouls > 29.5, n_sims),
+        "Under_29.5": _calc_stat(fouls < 29.5, n_sims),
     }
 
     def _compute_multigol_ranges(goals_arr: np.ndarray, ranges: List[Tuple[int, int]]) -> Dict[str, Any]:
@@ -871,6 +999,7 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, float]] 
         "goal_nogoal_primo_tempo": m_gg_ng_ht,
         "cartellini": m_cards,
         "calci_dangolo": m_corners,
+        "falli": m_fouls,
         "multigol_partita": m_mg_match,
         "multigol_casa": m_mg_home,
         "multigol_ospite": m_mg_away,
@@ -880,24 +1009,19 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, float]] 
         "over_under_squadra_ospite": m_over_away,
     }
 
-    # 8. Recupero quote e calcolo Value Betting
-    from scraper import fetch_market_odds
-    if custom_odds is not None:
-        market_odds = custom_odds
-    else:
-        odds_res = fetch_market_odds(
-            home_team=config.home_team.name,
-            away_team=config.away_team.name,
-            home_elo=config.home_team.elo,
-            away_elo=config.away_team.elo,
-            home_attack=config.home_team.attack,
-            away_attack=config.away_team.attack,
-            home_defense=config.home_team.defense,
-            away_defense=config.away_team.defense,
-        )
-        market_odds = odds_res.get("odds", {})
+    def _mode_pair(first: np.ndarray, second: np.ndarray) -> Tuple[int, int]:
+        pairs, counts = np.unique(np.column_stack((first, second)), axis=0, return_counts=True)
+        mode = pairs[int(np.argmax(counts))]
+        return int(mode[0]), int(mode[1])
 
+    predicted_ht = _mode_pair(home_ht, away_ht)
+    predicted_2h = _mode_pair(home_2h, away_2h)
+    predicted_ft = _mode_pair(home_ft, away_ft)
+
+    # 8. Le quote sono solo un filtro opzionale per il Value Betting.
+    market_odds = custom_odds or {}
     value_betting = calculate_value_bets(all_markets, market_odds)
+    value_betting = validate_value_bets_against_score(value_betting, *predicted_ft)
 
     # 9. Sintesi narrativa dell'assistente AI (2-3 righe)
     ai_narrative = generate_ai_narrative(
@@ -968,6 +1092,11 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, float]] 
             "away_team_strength": calculate_team_strength(config.away_team),
             "simulations_count": n_sims,
             "execution_time_ms": elapsed_ms,
+            "predicted_score": {
+                "first_half": {"home": predicted_ht[0], "away": predicted_ht[1]},
+                "second_half": {"home": predicted_2h[0], "away": predicted_2h[1]},
+                "full_time": {"home": predicted_ft[0], "away": predicted_ft[1]},
+            },
             "model": "Bivariate Poisson with Dixon-Coles Correction (Monte Carlo Vectorized)"
         },
         "markets": all_markets,

@@ -63,10 +63,37 @@ def test_simulation_50k_consistency():
     for m in expected_markets:
         assert m in markets, f"Mercato {m} mancante!"
 
+    assert "falli" in markets
+    assert markets["falli"]["expected_mean"] > 0
+    for key in ("Over_19.5", "Under_19.5", "Over_24.5", "Under_24.5", "Over_29.5", "Under_29.5"):
+        assert key in markets["falli"]
+
     # 6. Verifica convergenza
     assert "best_synergy_market" in convergence
     assert "assistant_explanation" in convergence
     assert len(convergence["assistant_explanation"]) > 50
+
+
+def test_match_config_accepts_and_preserves_advanced_manual_parameters():
+    advanced = {
+        "home_momentum": 8.0,
+        "away_momentum": 3.0,
+        "home_absence_impact": 0.25,
+        "away_absence_impact": 0.10,
+        "home_stakes_multiplier": 1.06,
+        "away_stakes_multiplier": 1.08,
+        "referee_yellow_avg": 6.2,
+        "referee_red_avg": 0.35,
+        "referee_fouls_avg": 31.0,
+    }
+    config = MatchConfig(
+        home_team=TeamParams(name="Home"),
+        away_team=TeamParams(name="Away"),
+        **advanced,
+    )
+
+    for field_name, expected in advanced.items():
+        assert getattr(config, field_name) == expected
 
 
 def test_form_affects_expected_goals_and_all_requested_ranges_exist():
