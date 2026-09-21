@@ -47,6 +47,27 @@ class MatchConfig:
     referee_fouls_avg: float = 24.0
 
 
+def _recent_form_multiplier(form: str) -> float:
+    """Pesa le ultime cinque gare dando piu peso agli eventi recenti."""
+    values = {"W": 1.06, "D": 1.0, "L": 0.94}
+    results = [item.strip().upper() for item in form.split("-")[-5:]]
+    if not results:
+        return 1.0
+    weights = np.array([0.70 ** index for index in range(len(results) - 1, -1, -1)], dtype=np.float64)
+    factors = np.array([values.get(item, 1.0) for item in results], dtype=np.float64)
+    return float(np.average(factors, weights=weights))
+
+
+def _absence_multiplier(impact: float) -> float:
+    """Riduce la produzione in modo non lineare quando l'assenza e importante."""
+    normalized = float(np.clip(impact, 0.0, 1.0))
+    return float(np.clip(1.0 - 0.24 * normalized ** 1.35, 0.70, 1.0))
+
+
+def _momentum_volatility(value: float) -> float:
+    return float(np.clip(0.85 + 0.03 * np.clip(value, 0.0, 10.0), 0.85, 1.15))
+
+
 def calculate_team_strength(team: TeamParams) -> float:
     """Punteggio organico 0-100, esplicito e composto da Elo, attacco, difesa e forma."""
     form_points = {"W": 1.0, "D": 0.5, "L": 0.0}
@@ -79,23 +100,10 @@ def calculate_expected_goals(config: MatchConfig) -> Tuple[float, float]:
     Calcola i tassi attesi di gol (lambda per casa, mu per trasferta)
     integrando forza offensiva, difensiva, fattore campo e rating Elo.
     """
-    def form_multiplier(form: str) -> float:
-        values = {"W": 1.04, "D": 1.0, "L": 0.96}
-        results = [values.get(item.strip().upper(), 1.0) for item in form.split("-")[-5:]]
-        return float(np.mean(results)) if results else 1.0
-
-    home_form = form_multiplier(config.home_team.recent_form)
-    away_form = form_multiplier(config.away_team.recent_form)
-
-    def momentum_multiplier(value: float) -> float:
-        return float(np.clip(0.94 + np.clip(value, 0.0, 10.0) * 0.012, 0.94, 1.06))
-
-    home_momentum = momentum_multiplier(config.home_momentum)
-    away_momentum = momentum_multiplier(config.away_momentum)
-    home_availability = 1.0 - 0.18 * float(np.clip(config.home_absence_impact, 0.0, 1.0))
-    away_availability = 1.0 - 0.18 * float(np.clip(config.away_absence_impact, 0.0, 1.0))
-    home_stakes = float(np.clip(config.home_stakes_multiplier, 0.90, 1.10))
-    away_stakes = float(np.clip(config.away_stakes_multiplier, 0.90, 1.10))
+    home_form = _recent_form_multiplier(config.home_team.recent_form)
+    away_form = _recent_form_multiplier(config.away_team.recent_form)
+    home_availability = _absence_multiplier(config.home_absence_impact)
+    away_availability = _absence_multiplier(config.away_absence_impact)
 
     # Calcolo differenziale Elo
     delta_elo = config.home_team.elo - config.away_team.elo
@@ -116,9 +124,7 @@ def calculate_expected_goals(config: MatchConfig) -> Tuple[float, float]:
         * elo_mult_home
         * home_form
         * (2.0 - away_form)
-        * home_momentum
         * home_availability
-        * home_stakes
         * (1.0 + 0.10 * float(np.clip(config.away_absence_impact, 0.0, 1.0)))
     )
 
@@ -129,38 +135,51 @@ def calculate_expected_goals(config: MatchConfig) -> Tuple[float, float]:
         * elo_mult_away
         * away_form
         * (2.0 - home_form)
-        * away_momentum
         * away_availability
-        * away_stakes
         * (1.0 + 0.10 * float(np.clip(config.home_absence_impact, 0.0, 1.0)))
     )
 
-    # Gli xG inseriti descrivono il rendimento stagionale: quando disponibili,
-    # la coppia attacco di una squadra + xG concessi dall'avversaria diventa
-    # il riferimento principale, mentre il modello organico resta un correttivo.
-    lambda_ = model_lambda
-    mu = model_mu
-    if config.home_team.xg_for is not None and config.away_team.xg_against is not None:
-        xg_home = (config.home_team.xg_for + config.away_team.xg_against) / 2.0
-        lambda_ = model_lambda * 0.20 + xg_home * config.home_advantage * 0.80
-    elif config.home_team.xg_for is not None:
-        lambda_ = model_lambda * 0.20 + config.home_team.xg_for * config.home_advantage * 0.80
-    elif config.away_team.xg_against is not None:
-        lambda_ = model_lambda * 0.20 + config.away_team.xg_against * config.home_advantage * 0.80
+    # Gli xG recenti sono un correttore moltiplicativo del modello organico.
+    # In questo modo attacco, difesa, forma, xG e disponibilita restano nella stessa catena.
+    def xg_multiplier(xg_for: Optional[float], xg_against: Optional[float]) -> float:
+        available = [value for value in (xg_for, xg_against) if value is not None]
+        if not available:
+            return 1.0
+        recent_xg = float(np.mean(available))
+        return float(np.clip(0.65 + recent_xg / 3.0, 0.70, 1.55))
 
-    if config.away_team.xg_for is not None and config.home_team.xg_against is not None:
-        xg_away = (config.away_team.xg_for + config.home_team.xg_against) / 2.0
-        mu = model_mu * 0.20 + xg_away * 0.80
-    elif config.away_team.xg_for is not None:
-        mu = model_mu * 0.20 + config.away_team.xg_for * 0.80
-    elif config.home_team.xg_against is not None:
-        mu = model_mu * 0.20 + config.home_team.xg_against * 0.80
-
+    lambda_ = model_lambda * xg_multiplier(config.home_team.xg_for, config.away_team.xg_against)
+    mu = model_mu * xg_multiplier(config.away_team.xg_for, config.home_team.xg_against)
     # Protezione limiti minimi e massimi
     lambda_ = max(0.1, min(6.5, float(lambda_)))
     mu = max(0.1, min(6.5, float(mu)))
 
     return lambda_, mu
+
+
+def _filter_score_matrix_for_market_trend(joint_probs: np.ndarray, lambda_: float, mu: float) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Elimina gli scenari incompatibili con un trend offensivo gia evidente."""
+    goals = np.arange(joint_probs.shape[0])
+    home, away = np.meshgrid(goals, goals, indexing="ij")
+    total = home + away
+    over_25 = float(np.sum(joint_probs[total > 2]))
+    both_score = float(np.sum(joint_probs[(home > 0) & (away > 0)]))
+    high_intensity = over_25 >= 0.65 and both_score >= 0.65 and lambda_ + mu >= 2.7
+    mask = np.ones_like(joint_probs, dtype=bool)
+    if high_intensity:
+        mask &= total >= 2
+    filtered = np.where(mask, joint_probs, 0.0)
+    total_probability = float(np.sum(filtered))
+    if total_probability <= 0.0:
+        filtered = joint_probs
+        total_probability = float(np.sum(filtered))
+    filtered /= total_probability
+    return filtered, {
+        "high_intensity_filter": high_intensity,
+        "raw_over_2_5_probability": round(over_25 * 100.0, 2),
+        "raw_goal_probability": round(both_score * 100.0, 2),
+        "removed_low_total_scenarios": high_intensity,
+    }
 
 
 def generate_bivariate_dixon_coles_probs(
@@ -296,7 +315,7 @@ def analyze_market_convergence(
     # Generazione della spiegazione testuale
     explanation_parts = []
     explanation_parts.append(
-        f"L'analisi su 50.000 simulazioni Monte Carlo (modello Dixon-Coles) per {home_name} vs {away_name} "
+        f"L'analisi su {n_sims:,} simulazioni Monte Carlo (modello Dixon-Coles) per {home_name} vs {away_name} "
         f"evidenzia tassi di gol attesi pari a {lambda_:.2f} per i padroni di casa e {mu:.2f} per gli ospiti."
     )
 
@@ -771,6 +790,73 @@ def generate_ai_narrative(
     return f"{riga1} {riga2} {riga3}"
 
 
+def generate_deep_narrative(
+    home_name: str,
+    away_name: str,
+    lambda_: float,
+    mu: float,
+    home_ft: np.ndarray,
+    away_ft: np.ndarray,
+    home_ht: np.ndarray,
+    away_ht: np.ndarray,
+    cards: np.ndarray,
+    config: MatchConfig,
+    best_convergence: Optional[Dict[str, Any]],
+    best_value: Optional[Dict[str, Any]],
+) -> str:
+    """Racconta la dinamica emersa dai vettori simulati, senza frasi prefabbricate."""
+    total_ft = home_ft + away_ft
+    total_ht = home_ht + away_ht
+    late_goals = total_ft - total_ht
+    mode_pairs, mode_counts = np.unique(np.column_stack((home_ft, away_ft)), axis=0, return_counts=True)
+    mode_index = int(np.argmax(mode_counts))
+    mode_home, mode_away = (int(mode_pairs[mode_index, 0]), int(mode_pairs[mode_index, 1]))
+    mode_share = float(mode_counts[mode_index] / len(total_ft) * 100.0)
+    first_half_share = float(np.mean(total_ht) / max(np.mean(total_ft), 0.01))
+    late_share = float(np.mean(late_goals) / max(np.mean(total_ft), 0.01))
+    card_mean = float(np.mean(cards))
+    home_late = float(np.mean(home_ft - home_ht))
+    away_late = float(np.mean(away_ft - away_ht))
+    leader = home_name if lambda_ >= mu else away_name
+    weaker = away_name if leader == home_name else home_name
+
+    if late_share >= 0.58:
+        tempo = f"Il baricentro si alza soprattutto dopo l'intervallo: il {late_share * 100:.1f}% del volume medio di gol arriva nella ripresa"
+    elif first_half_share >= 0.52:
+        tempo = f"La partita tende a sbloccarsi presto, con il primo tempo che assorbe il {first_half_share * 100:.1f}% del volume medio di gol"
+    else:
+        tempo = "Il copione resta distribuito tra i due tempi, senza un unico momento dominante"
+
+    if home_late > away_late + 0.12:
+        transition = f"la spinta tardiva favorisce {home_name} ({home_late:.2f} gol medi nella ripresa contro {away_late:.2f})"
+    elif away_late > home_late + 0.12:
+        transition = f"le transizioni tardive premiano {away_name} ({away_late:.2f} contro {home_late:.2f} gol medi nella ripresa)"
+    else:
+        transition = "la distribuzione temporale resta sostanzialmente bilanciata tra le due squadre"
+
+    if mode_home == mode_away:
+        result_read = f"Lo score modale e {mode_home}-{mode_away}, presente nel {mode_share:.2f}% dei campioni"
+    else:
+        result_read = f"Lo score modale e {mode_home}-{mode_away}, presente nel {mode_share:.2f}% dei campioni e coerente con il vantaggio atteso di {leader}"
+
+    tension = "La tensione aumenta la varianza disciplinare" if card_mean >= 5.5 else "Il profilo disciplinare resta contenuto e non introduce uno scompenso marcato"
+    convergence = ""
+    if best_convergence:
+        convergence = (
+            f"La convergenza piu informativa e {best_convergence.get('combo', 'la combinazione principale')}, "
+            f"osservata nel {best_convergence.get('percentage', 0):.2f}% degli scenari: non e un dato isolato, ma l'incrocio tra il volume atteso ({lambda_ + mu:.2f} xG) e la distribuzione del rischio."
+        )
+    value = ""
+    if best_value:
+        value = f" Il confronto quote segnala {best_value['market']} a {best_value['odds']:.2f}, con EV {best_value['ev_pct']:+.1f}%."
+
+    return (
+        f"Su {len(total_ft):,} partite simulate, {leader} costruisce il margine teorico con {lambda_:.2f} xG contro {mu:.2f} di {weaker}. "
+        f"{tempo}; {transition}. {result_read}. {tension}, con una media di {card_mean:.2f} cartellini: assenze e motivazioni entrano quindi nel racconto come disponibilita e spinta finale, non come gol aggiunti artificialmente. "
+        f"{convergence}{value}"
+    )
+
+
 def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional[float]]] = None) -> Dict[str, Any]:
     """
     Esegue la simulazione completa di 50.000 partite con NumPy vettorializzato.
@@ -792,6 +878,7 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
     joint_probs = generate_bivariate_dixon_coles_probs(
         lambda_, mu, config.dixon_coles_rho, max_goals=max_goals
     )
+    joint_probs, trend_filter = _filter_score_matrix_for_market_trend(joint_probs, lambda_, mu)
     flat_probs = joint_probs.flatten()
 
     # 3. Campionamento Monte Carlo vettorializzato su 50.000 match
@@ -802,9 +889,12 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
     total_ft = home_ft + away_ft
 
     # 4. Suddivisione 1° Tempo / 2° Tempo (Campionamento Binomiale condizionato, p_ht = 0.45)
-    p_ht = 0.45
-    home_ht = np.random.binomial(home_ft, p_ht).astype(np.int32)
-    away_ht = np.random.binomial(away_ft, p_ht).astype(np.int32)
+    home_late_push = 0.02 * (config.home_momentum - 5.0) + 1.5 * (config.home_stakes_multiplier - 1.0)
+    away_late_push = 0.02 * (config.away_momentum - 5.0) + 1.5 * (config.away_stakes_multiplier - 1.0)
+    home_ht_probability = float(np.clip(0.45 - home_late_push, 0.35, 0.55))
+    away_ht_probability = float(np.clip(0.45 - away_late_push, 0.35, 0.55))
+    home_ht = np.random.binomial(home_ft, home_ht_probability).astype(np.int32)
+    away_ht = np.random.binomial(away_ft, away_ht_probability).astype(np.int32)
     total_ht = home_ht + away_ht
 
     home_2h = home_ft - home_ht
@@ -819,7 +909,10 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
     intensity_factor = (config.home_stakes_multiplier + config.away_stakes_multiplier) / 2.0
     exp_cards = 4.4 * ((config.home_team.cards_factor + config.away_team.cards_factor) / 2.0) * tension_factor * referee_yellow_factor * referee_red_factor * intensity_factor
     exp_cards = max(1.0, min(22.0, exp_cards))
-    cards = np.random.poisson(lam=exp_cards, size=n_sims)
+    referee_dispersion = 1.0 + float(np.clip(config.referee_yellow_avg / 4.5 - 1.0, 0.0, 1.5)) * 0.35
+    card_shape = max(0.5, exp_cards / max(referee_dispersion - 1.0, 0.01))
+    card_rates = np.random.gamma(card_shape, max(referee_dispersion - 1.0, 0.01), size=n_sims) if referee_dispersion > 1.01 else exp_cards
+    cards = np.random.poisson(lam=card_rates, size=n_sims)
 
     exp_corners = 9.8 * ((lambda_ + mu) / 2.5) * ((config.home_team.corners_factor + config.away_team.corners_factor) / 2.0) * intensity_factor
     exp_corners = max(5.0, exp_corners)
@@ -828,7 +921,10 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
     # Falli: stima dinamica coerente con intensità e propensione ai cartellini.
     exp_fouls = config.referee_fouls_avg * ((config.home_team.cards_factor + config.away_team.cards_factor) / 2.0) * tension_factor * intensity_factor
     exp_fouls = max(12.0, min(45.0, exp_fouls))
-    fouls = np.random.poisson(lam=exp_fouls, size=n_sims)
+    foul_dispersion = 1.0 + float(np.clip(config.referee_fouls_avg / 24.0 - 1.0, 0.0, 1.5)) * 0.25
+    foul_shape = max(0.5, exp_fouls / max(foul_dispersion - 1.0, 0.01))
+    foul_rates = np.random.gamma(foul_shape, max(foul_dispersion - 1.0, 0.01), size=n_sims) if foul_dispersion > 1.01 else exp_fouls
+    fouls = np.random.poisson(lam=foul_rates, size=n_sims)
 
     # 6. CALCOLO DEI 15 MERCATI RICHIESTI
     m_1x2_ft = {
@@ -1024,14 +1120,17 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
     value_betting = validate_value_bets_against_score(value_betting, *predicted_ft)
 
     # 9. Sintesi narrativa dell'assistente AI (2-3 righe)
-    ai_narrative = generate_ai_narrative(
+    ai_narrative = generate_deep_narrative(
         home_name=config.home_team.name,
         away_name=config.away_team.name,
         lambda_=lambda_,
         mu=mu,
-        p_1=float(m_1x2_ft["1"]["percentage"]),
-        p_x=float(m_1x2_ft["X"]["percentage"]),
-        p_2=float(m_1x2_ft["2"]["percentage"]),
+        home_ft=home_ft,
+        away_ft=away_ft,
+        home_ht=home_ht,
+        away_ht=away_ht,
+        cards=cards,
+        config=config,
         best_convergence=convergence.get("best_synergy_market"),
         best_value=value_betting.get("best_value_bet"),
     )
@@ -1092,6 +1191,7 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
             "away_team_strength": calculate_team_strength(config.away_team),
             "simulations_count": n_sims,
             "execution_time_ms": elapsed_ms,
+            "market_filter": trend_filter,
             "predicted_score": {
                 "first_half": {"home": predicted_ht[0], "away": predicted_ht[1]},
                 "second_half": {"home": predicted_2h[0], "away": predicted_2h[1]},
