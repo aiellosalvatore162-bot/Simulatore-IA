@@ -105,54 +105,46 @@ def calculate_expected_goals(config: MatchConfig) -> Tuple[float, float]:
     home_availability = _absence_multiplier(config.home_absence_impact)
     away_availability = _absence_multiplier(config.away_absence_impact)
 
-    # Calcolo differenziale Elo
+    def weighted_strength(
+        attack: float,
+        opponent_defense: float,
+        own_xg: Optional[float],
+        opponent_xg_against: Optional[float],
+        form: float,
+        elo_delta: float,
+        base_goals: float,
+    ) -> float:
+        signals = [attack, opponent_defense, form, 10.0 ** (elo_delta / 2400.0)]
+        weights = [0.35, 0.25, 0.15, 0.10]
+        xg_values = [value / base_goals for value in (own_xg, opponent_xg_against) if value is not None]
+        if xg_values:
+            signals.append(float(np.mean(xg_values)))
+            weights.append(0.15)
+        else:
+            weights[0] += 0.075
+            weights[1] += 0.075
+        normalized = np.clip(np.asarray(signals, dtype=np.float64), 0.55, 1.65)
+        return float(np.exp(np.average(np.log(normalized), weights=weights)))
+
     delta_elo = config.home_team.elo - config.away_team.elo
-    # Moltiplicatore Elo con scala logistica/esponenziale smussata
-    elo_mult_home = 10.0 ** (delta_elo / 1200.0)
-    elo_mult_away = 10.0 ** (-delta_elo / 1200.0)
-
-    # Limitiamo il moltiplicatore Elo per evitare distorsioni estreme
-    elo_mult_home = max(0.35, min(2.8, elo_mult_home))
-    elo_mult_away = max(0.35, min(2.8, elo_mult_away))
-
-    # Modello organico: attacco/difesa/Elo/forma.
-    model_lambda = (
-        config.base_goals_home
-        * config.home_team.attack
-        * config.away_team.defense
-        * config.home_advantage
-        * elo_mult_home
-        * home_form
-        * (2.0 - away_form)
-        * home_availability
-        * (1.0 + 0.10 * float(np.clip(config.away_absence_impact, 0.0, 1.0)))
+    home_strength = weighted_strength(
+        config.home_team.attack, config.away_team.defense,
+        config.home_team.xg_for, config.away_team.xg_against,
+        home_form, delta_elo, config.base_goals_home,
+    )
+    away_strength = weighted_strength(
+        config.away_team.attack, config.home_team.defense,
+        config.away_team.xg_for, config.home_team.xg_against,
+        away_form, -delta_elo, config.base_goals_away,
     )
 
-    model_mu = (
-        config.base_goals_away
-        * config.away_team.attack
-        * config.home_team.defense
-        * elo_mult_away
-        * away_form
-        * (2.0 - home_form)
-        * away_availability
-        * (1.0 + 0.10 * float(np.clip(config.home_absence_impact, 0.0, 1.0)))
-    )
+    lambda_ = config.base_goals_home * config.home_advantage * home_strength
+    lambda_ *= home_availability * (1.0 + 0.10 * float(np.clip(config.away_absence_impact, 0.0, 1.0)))
+    mu = config.base_goals_away * away_strength
+    mu *= away_availability * (1.0 + 0.10 * float(np.clip(config.home_absence_impact, 0.0, 1.0)))
 
-    # Gli xG recenti sono un correttore moltiplicativo del modello organico.
-    # In questo modo attacco, difesa, forma, xG e disponibilita restano nella stessa catena.
-    def xg_multiplier(xg_for: Optional[float], xg_against: Optional[float]) -> float:
-        available = [value for value in (xg_for, xg_against) if value is not None]
-        if not available:
-            return 1.0
-        recent_xg = float(np.mean(available))
-        return float(np.clip(0.65 + recent_xg / 3.0, 0.70, 1.55))
-
-    lambda_ = model_lambda * xg_multiplier(config.home_team.xg_for, config.away_team.xg_against)
-    mu = model_mu * xg_multiplier(config.away_team.xg_for, config.home_team.xg_against)
-    # Protezione limiti minimi e massimi
-    lambda_ = max(0.1, min(6.5, float(lambda_)))
-    mu = max(0.1, min(6.5, float(mu)))
+    lambda_ = float(np.clip(lambda_, 0.20, 3.50))
+    mu = float(np.clip(mu, 0.20, 3.50))
 
     return lambda_, mu
 
@@ -874,19 +866,16 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
     # 1. Calcolo tassi attesi di gol
     lambda_, mu = calculate_expected_goals(config)
 
-    # 2. Matrice Dixon-Coles bivariata
-    joint_probs = generate_bivariate_dixon_coles_probs(
-        lambda_, mu, config.dixon_coles_rho, max_goals=max_goals
-    )
-    joint_probs, trend_filter = _filter_score_matrix_for_market_trend(joint_probs, lambda_, mu)
-    flat_probs = joint_probs.flatten()
-
-    # 3. Campionamento Monte Carlo vettorializzato su 50.000 match
-    grid_size = max_goals + 1
-    sampled_indices = np.random.choice(len(flat_probs), size=n_sims, p=flat_probs)
-    home_ft = (sampled_indices // grid_size).astype(np.int32)
-    away_ft = (sampled_indices % grid_size).astype(np.int32)
+    # 2. Campionamento Monte Carlo stocastico direttamente dai lambda.
+    home_ft = np.random.poisson(lam=lambda_, size=n_sims).astype(np.int32)
+    away_ft = np.random.poisson(lam=mu, size=n_sims).astype(np.int32)
     total_ft = home_ft + away_ft
+    trend_filter = {
+        "high_intensity_filter": False,
+        "raw_over_2_5_probability": None,
+        "raw_goal_probability": None,
+        "removed_low_total_scenarios": False,
+    }
 
     # 4. Suddivisione 1° Tempo / 2° Tempo (Campionamento Binomiale condizionato, p_ht = 0.45)
     home_late_push = 0.02 * (config.home_momentum - 5.0) + 1.5 * (config.home_stakes_multiplier - 1.0)
