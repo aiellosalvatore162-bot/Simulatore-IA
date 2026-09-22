@@ -1,16 +1,15 @@
 """Interfaccia Streamlit standalone per il motore di simulazione calcistica."""
 
 from datetime import datetime
+from dataclasses import asdict
 import json
-import math
+import re
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
-from scipy.stats import poisson
-
 import database
-from engine import MatchConfig, TeamParams, calculate_expected_goals, calculate_team_strength, simulate_match
+from engine import MatchConfig, TeamParams, calculate_team_strength, simulate_match
 
 
 st.set_page_config(
@@ -115,6 +114,176 @@ def _number(value: Any, default: float) -> float:
 def _optional_number(value: Any) -> Optional[float]:
     number = _number(value, float("nan"))
     return None if pd.isna(number) else number
+
+
+def parse_team_paste(text: str) -> Dict[str, Any]:
+    """Estrae campi squadra e avanzati da testo libero senza inventare valori."""
+    parsed: Dict[str, Any] = {"bookmaker_odds": parse_bookmaker_odds(text)}
+    section = "home"
+    aliases = {
+        "nome": "name", "squadra": "name", "nome casa": "home_name", "nome ospite": "away_name",
+        "casa": "home_name", "home": "home_name", "ospite": "away_name", "away": "away_name",
+        "attacco": "attack", "difesa": "defense", "elo": "elo", "forma": "recent_form",
+        "forma recente": "recent_form", "fattore cartellini": "cards_factor", "cartellini": "cards_factor",
+        "fattore corner": "corners_factor", "corner": "corners_factor", "xg fatti": "xg_for",
+        "xg subiti": "xg_against", "xg fatti casa": "home_xg_for", "xg subiti casa": "home_xg_against",
+        "xg fatti ospite": "away_xg_for", "xg subiti ospite": "away_xg_against",
+        "momentum recente": "momentum", "impatto assenze": "absence", "assenze": "absence",
+        "motivazione": "stakes", "obiettivo": "stakes", "motivazione obiettivo": "stakes", "gialli medi": "referee_yellow_avg",
+        "rossi medi": "referee_red_avg", "falli medi": "referee_fouls_avg",
+    }
+    numeric_fields = {
+        "attack", "defense", "elo", "cards_factor", "corners_factor", "xg_for", "xg_against",
+        "home_xg_for", "home_xg_against", "away_xg_for", "away_xg_against", "momentum",
+        "absence", "referee_yellow_avg", "referee_red_avg", "referee_fouls_avg",
+    }
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        section_match = re.match(r"^(?:\[?\s*)?(casa|home|ospite|away)(?:\s*\]?)\s*:?\s*$", line, re.I)
+        if section_match:
+            section = "home" if section_match.group(1).lower() in {"casa", "home"} else "away"
+            continue
+        match = re.match(r"^\s*([^:=\-]+?)\s*[:=\-]\s*(.*?)\s*$", line)
+        if not match:
+            continue
+        raw_key, raw_value = match.groups()
+        key = re.sub(r"\s+", " ", raw_key.lower().replace("_", " ").replace("/", " ").replace("%", "").strip())
+        field = aliases.get(key)
+        if field is None:
+            continue
+        if field in {"home_name", "away_name"}:
+            parsed[field] = raw_value.strip()
+            section = "home" if field == "home_name" else "away"
+            continue
+        if field == "name":
+            parsed[f"{section}_name"] = raw_value.strip()
+            continue
+        if field == "recent_form" or field == "stakes":
+            parsed[f"{section}_{field}"] = raw_value.strip()
+            continue
+        value_text = raw_value.replace(",", ".")
+        if field in numeric_fields:
+            number_match = re.search(r"-?\d+(?:\.\d+)?", value_text)
+            if not number_match:
+                continue
+            number = float(number_match.group())
+            if field == "absence" and "%" in raw_value:
+                number /= 100.0
+            if field == "absence":
+                parsed[f"{section}_absence_impact"] = number
+            elif field == "momentum":
+                parsed[f"{section}_momentum"] = number
+            elif field.startswith("referee_"):
+                parsed[field] = number
+            else:
+                parsed[f"{section}_{field}"] = number
+    return parsed
+
+
+def parse_bookmaker_odds(text: str) -> Dict[str, float]:
+    """Legge quote bookmaker in formato libero e restituisce categoria:selezione."""
+    odds: Dict[str, float] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        lowered = line.lower().replace(",", ".")
+        number_matches = list(re.finditer(r"(?<![\d.])\d+(?:\.\d+)?", lowered))
+        if not number_matches:
+            continue
+        quote_match = number_matches[-1]
+        quote = float(quote_match.group())
+        if quote <= 1.0:
+            continue
+        before_quote = lowered[:quote_match.start()]
+        category = None
+        selection = None
+        if "1x2" in before_quote:
+            category = "1x2_primo_tempo" if "primo" in before_quote or "1t" in before_quote else "1x2_finale"
+            selection_match = re.search(r"(?:^|[:=@\s])([12x])\s*(?:[@:=]|$)", before_quote)
+            selection = selection_match.group(1).upper() if selection_match else None
+        elif "goal" in before_quote or "no goal" in before_quote:
+            category = "goal_nogoal_primo_tempo" if "primo" in before_quote or "1t" in before_quote else "goal_nogoal_finale"
+            selection = "No_Goal" if "no goal" in before_quote else "Goal"
+        elif "over" in before_quote or "under" in before_quote:
+            side = "finale"
+            if "primo" in before_quote or "1t" in before_quote:
+                side = "primo_tempo"
+            elif "casa" in before_quote:
+                side = "squadra_casa"
+            elif "ospite" in before_quote or "trasferta" in before_quote:
+                side = "squadra_ospite"
+            if "cartell" in before_quote:
+                category = "cartellini"
+            elif "corner" in before_quote:
+                category = "calci_dangolo"
+            elif "fall" in before_quote:
+                category = "falli"
+            elif side == "finale":
+                category = "over_under_finale"
+            elif side == "primo_tempo":
+                category = "over_under_primo_tempo"
+            else:
+                category = f"over_under_{side}"
+            market_match = re.search(
+                r"\b(over|under)(?:\s+(?:finale|primo\s+tempo|casa|ospite|trasferta|cartellini|corner|angoli|falli))*\s*(\d+(?:\.\d+)?)",
+                before_quote,
+            )
+            selection = f"{market_match.group(1).capitalize()}_{market_match.group(2)}" if market_match else None
+        elif "multigol" in before_quote or "multi gol" in before_quote:
+            if "tempi" in before_quote or "1t" in before_quote or "2t" in before_quote:
+                category = "multigol_primo_tempo_combo_secondo_tempo"
+                ranges = re.findall(r"\d+\s*[-/]\s*\d+", before_quote)
+                if len(ranges) >= 2:
+                    first_range = re.sub(r"\s*[-/]\s*", "_", ranges[0])
+                    second_range = re.sub(r"\s*[-/]\s*", "_", ranges[1])
+                    selection = f"1T_{first_range}_e_2T_{second_range}"
+            elif "casa + ospite" in before_quote or "casa e ospite" in before_quote:
+                category = "multigol_casa_combo_ospite"
+                ranges = re.findall(r"\d+\s*[-/]\s*\d+", before_quote)
+                if len(ranges) >= 2:
+                    first_range = re.sub(r"\s*[-/]\s*", "_", ranges[0])
+                    second_range = re.sub(r"\s*[-/]\s*", "_", ranges[1])
+                    selection = f"Casa_{first_range}_e_Ospite_{second_range}"
+            else:
+                category = "multigol_casa" if "casa" in before_quote else "multigol_ospite" if "ospite" in before_quote else "multigol_partita"
+                range_match = re.search(r"(\d+)\s*[-/]\s*(\d+)", before_quote)
+                selection = f"{range_match.group(1)}_{range_match.group(2)}" if range_match else None
+        if category and selection:
+            odds[f"{category}:{selection}"] = quote
+    return odds
+
+
+def apply_pasted_values(parsed: Dict[str, Any], widget_prefix: str) -> None:
+    """Aggiorna soltanto le chiavi riconosciute; gli altri input restano intatti."""
+    team_fields = ("name", "attack", "defense", "elo", "cards_factor", "corners_factor", "xg_for", "xg_against", "recent_form")
+    for side in ("home", "away"):
+        for field in team_fields:
+            key = f"{side}_{field}"
+            if key in parsed:
+                st.session_state[f"{widget_prefix}_{side}_{field if field != 'cards_factor' else 'cards'}"] = parsed[key]
+    advanced_keys = {
+        "home_momentum": f"{widget_prefix}_home_momentum", "away_momentum": f"{widget_prefix}_away_momentum",
+        "home_absence_impact": f"{widget_prefix}_home_absence", "away_absence_impact": f"{widget_prefix}_away_absence",
+        "referee_yellow_avg": f"{widget_prefix}_ref_yellows", "referee_red_avg": f"{widget_prefix}_ref_reds",
+        "referee_fouls_avg": f"{widget_prefix}_ref_fouls",
+    }
+    for field, widget_key in advanced_keys.items():
+        if field in parsed:
+            value = parsed[field]
+            if field.endswith("absence_impact"):
+                value *= 100.0
+            st.session_state[widget_key] = value
+    for side in ("home", "away"):
+        stakes = parsed.get(f"{side}_stakes")
+        if stakes:
+            options = ["Tranquilla a meta classifica", "Lotta Scudetto / Europa", "Salvezza disperata", "Derby / alta rivalita"]
+            normalized = stakes.lower()
+            selected = next((option for option in options if option.lower() in normalized or normalized in option.lower()), None)
+            if selected:
+                st.session_state[f"{widget_prefix}_{side}_stakes"] = selected
+    for quote_key, quote in parsed.get("bookmaker_odds", {}).items():
+        st.session_state[f"odds_{quote_key.replace(':', '_')}"] = quote
 
 
 @st.cache_data(ttl=15, show_spinner=False)
@@ -277,10 +446,24 @@ def odds_editor() -> Dict[str, float]:
     st.markdown("### Quote bookmaker <span style='color:#91a4b2;font-size:.8rem'>(opzionali)</span>", unsafe_allow_html=True)
     st.caption("Lascia vuoti i mercati che non vuoi usare per il filtro value bet.")
 
+    def ranges(values: tuple[str, ...]) -> list[tuple[str, str]]:
+        return [(f"{side}_{threshold}", f"{side} {threshold}") for threshold in values for side in ("Over", "Under")]
+
     groups = {
         "1x2_finale": ("1X2 finale", [("1", "Casa"), ("X", "Pareggio"), ("2", "Ospite")]),
-        "over_under_finale": ("Over / Under 2.5", [("Over_2.5", "Over 2.5"), ("Under_2.5", "Under 2.5")]),
+        "1x2_primo_tempo": ("1X2 primo tempo", [("1", "Casa"), ("X", "Pareggio"), ("2", "Ospite")]),
+        "over_under_finale": ("Over / Under finale", ranges(("0.5", "1.5", "2.5", "3.5", "4.5"))),
+        "over_under_primo_tempo": ("Over / Under primo tempo", ranges(("0.5", "1.5", "2.5", "3.5", "4.5"))),
         "goal_nogoal_finale": ("Goal / No Goal", [("Goal", "Goal"), ("No_Goal", "No Goal")]),
+        "goal_nogoal_primo_tempo": ("Goal / No Goal primo tempo", [("Goal", "Goal"), ("No_Goal", "No Goal")]),
+        "multigol_partita": ("Multigol partita", [(key, key.replace("_", "-")) for key in ("0_2", "1_3", "2_4", "2_5", "3_6")]),
+        "multigol_casa": ("Multigol casa", [(key, key.replace("_", "-")) for key in ("0_2", "1_3", "2_4", "2_5", "3_6")]),
+        "multigol_ospite": ("Multigol ospite", [(key, key.replace("_", "-")) for key in ("0_2", "1_3", "2_4", "2_5", "3_6")]),
+        "over_under_squadra_casa": ("Over / Under casa", ranges(("0.5", "1.5", "2.5", "3.5"))),
+        "over_under_squadra_ospite": ("Over / Under ospite", ranges(("0.5", "1.5", "2.5", "3.5"))),
+        "cartellini": ("Cartellini", ranges(("3.5", "4.5", "5.5"))),
+        "calci_dangolo": ("Calci d'angolo", ranges(("8.5", "9.5", "10.5", "11.5"))),
+        "falli": ("Falli", ranges(("19.5", "24.5", "29.5"))),
     }
     for category, (title, markets) in groups.items():
         with st.expander(title):
@@ -291,7 +474,7 @@ def odds_editor() -> Dict[str, float]:
                         market_label,
                         min_value=1.01,
                         max_value=100.0,
-                        value=None,
+                        value=st.session_state.get(f"odds_{category}_{market_key}"),
                         step=0.01,
                         format="%.2f",
                         key=f"odds_{category}_{market_key}",
@@ -387,6 +570,109 @@ def save_history_entry(result: Dict[str, Any], home_team: TeamParams, away_team:
     if not any(item.get("history_id") == history_id and history_id is not None for item in history):
         history.insert(0, entry)
     return history_id
+
+
+def attach_replay_context(result: Dict[str, Any], home_team: TeamParams, away_team: TeamParams, advanced: Optional[Dict[str, Any]] = None, odds: Optional[Dict[str, Any]] = None) -> None:
+    """Conserva nel risultato gli input necessari per ricaricare una sessione."""
+    result.setdefault("metadata", {})["replay"] = {
+        "home_team": asdict(home_team),
+        "away_team": asdict(away_team),
+        "advanced": advanced or {},
+        "odds": odds or {},
+    }
+
+
+def _history_created_today(item: Dict[str, Any], today: Optional[str] = None) -> bool:
+    created = str(item.get("created_at", ""))
+    if not created:
+        return False
+    try:
+        created_date = datetime.fromisoformat(created.replace("Z", "+00:00")).astimezone().date().isoformat()
+    except ValueError:
+        created_date = created[:10]
+    return created_date == (today or datetime.now().date().isoformat())
+
+
+def daily_history() -> List[Dict[str, Any]]:
+    """Restituisce tutte le simulazioni salvate nella data locale corrente."""
+    return [item for item in database.get_simulation_history(limit=500) if _history_created_today(item)]
+
+
+def build_sniper_coupon(history: List[Dict[str, Any]], budget: float, system_mode: str = "Multipla standard") -> Dict[str, Any]:
+    """Costruisce una copertura giornaliera pesata per probabilita reale."""
+    budget = min(100.0, max(1.0, float(budget)))
+    candidates: List[Dict[str, Any]] = []
+    for item in history:
+        detail = database.get_simulation_history_by_id(int(item["id"]))
+        if not detail:
+            continue
+        try:
+            result = json.loads(detail.get("full_results_json") or "{}")
+        except (TypeError, ValueError):
+            continue
+        markets = result.get("markets", {})
+        for category, selection in (("1x2_finale", "1"), ("1x2_finale", "X"), ("1x2_finale", "2")):
+            stat = markets.get(category, {}).get(selection)
+            if isinstance(stat, dict) and stat.get("percentage") is not None:
+                candidates.append({
+                    "partita": f"{item.get('home_team_name', 'Casa')} - {item.get('away_team_name', 'Ospite')}",
+                    "segno": selection,
+                    "mercato": "1X2",
+                    "probabilita": float(stat["percentage"]),
+                    "history_id": item["id"],
+                })
+    best_by_match: Dict[str, Dict[str, Any]] = {}
+    for candidate in candidates:
+        current = best_by_match.get(candidate["partita"])
+        if current is None or candidate["probabilita"] > current["probabilita"]:
+            best_by_match[candidate["partita"]] = candidate
+    selections = sorted(best_by_match.values(), key=lambda value: value["probabilita"], reverse=True)
+    if system_mode == "Sistema integrato":
+        selections = selections[: min(8, len(selections))]
+        combinations = max(1, len(selections) * (len(selections) - 1) // 2)
+    else:
+        selections = selections[:10]
+        combinations = 1
+    total_probability = sum(item["probabilita"] for item in selections) or 1.0
+    for item in selections:
+        item["quota_budget"] = round(budget * item["probabilita"] / total_probability, 2)
+    return {
+        "date": datetime.now().date().isoformat(),
+        "budget": budget,
+        "mode": system_mode,
+        "combinations": combinations,
+        "selections": selections,
+        "covered_matches": len(selections),
+    }
+
+
+def reload_history_item(history_id: int) -> bool:
+    """Ricarica una simulazione nello spazio di lavoro personalizzato."""
+    detail = database.get_simulation_history_by_id(history_id)
+    if not detail:
+        return False
+    try:
+        result = json.loads(detail.get("full_results_json") or "{}")
+    except (TypeError, ValueError):
+        return False
+    replay = result.get("metadata", {}).get("replay", {})
+    home = replay.get("home_team")
+    away = replay.get("away_team")
+    if not home or not away:
+        return False
+    st.session_state["custom_result"] = result
+    st.session_state["custom_context"] = (TeamParams(**home), TeamParams(**away))
+    st.session_state["custom_replay_advanced"] = replay.get("advanced", {})
+    st.session_state["custom_replay_odds"] = replay.get("odds", {})
+    parsed = {}
+    for side, team in (("home", home), ("away", away)):
+        for field in ("name", "attack", "defense", "elo", "cards_factor", "corners_factor", "xg_for", "xg_against", "recent_form"):
+            if team.get(field) is not None:
+                parsed[f"{side}_{field}"] = team[field]
+    parsed.update(replay.get("advanced", {}))
+    apply_pasted_values(parsed, "custom")
+    st.session_state["page"] = "custom"
+    return True
 
 
 def _logo_html(team: TeamParams, logo: Optional[str]) -> str:
@@ -561,59 +847,28 @@ def render_welcome(competitions: List[Dict[str, Any]]) -> None:
     st.caption("Per partire subito, seleziona 'Nuova partita personalizzata' nel percorso di analisi qui sotto.")
 
 
-def build_coupon_candidates(competitions: List[Dict[str, Any]], target_low: float = 0.65, target_high: float = 0.70) -> List[Dict[str, Any]]:
-    """Costruisce selezioni trasparenti usando i dati reali delle partite sincronizzate."""
-    candidates: List[Dict[str, Any]] = []
-    target = (target_low + target_high) / 2.0
-    for league in competitions:
-        for match in load_matches(int(league["id"])):
-            try:
-                home = team_params_from_record(load_team(int(match["home_team_id"])), match.get("home_team_name", "Casa"))
-                away = team_params_from_record(load_team(int(match["away_team_id"])), match.get("away_team_name", "Ospite"))
-                config = MatchConfig(home_team=home, away_team=away, home_advantage=_number(match.get("home_advantage"), 1.15), n_simulations=1_000, seed=42)
-                lambda_value, mu_value = calculate_expected_goals(config)
-                outcomes: List[tuple[str, float]] = []
-                home_win = draw = away_win = over_25 = under_35 = 0.0
-                for home_goals in range(10):
-                    for away_goals in range(10):
-                        probability = float(poisson.pmf(home_goals, lambda_value) * poisson.pmf(away_goals, mu_value))
-                        if home_goals > away_goals:
-                            home_win += probability
-                        elif home_goals == away_goals:
-                            draw += probability
-                        else:
-                            away_win += probability
-                        if home_goals + away_goals > 2:
-                            over_25 += probability
-                        if home_goals + away_goals < 4:
-                            under_35 += probability
-                outcomes.extend([("1", home_win), ("X", draw), ("2", away_win), ("Over 2.5", over_25), ("Under 3.5", under_35)])
-                label, probability = min(outcomes, key=lambda item: abs(item[1] - target))
-                if target_low <= probability <= target_high:
-                    candidates.append({
-                        "Campionato": league.get("name", "N/D"),
-                        "Partita": f"{home.name} - {away.name}",
-                        "Mercato": label,
-                        "Probabilita": round(probability * 100.0, 2),
-                        "Quota stimata": round(1.0 / probability, 2),
-                        "_match_id": match.get("id"),
-                    })
-            except (KeyError, TypeError, ValueError):
-                continue
-    candidates.sort(key=lambda item: abs(item["Probabilita"] - target * 100.0))
-    return candidates[:13]
-
-
-def render_coupon(competitions: List[Dict[str, Any]]) -> None:
-    st.subheader("Schedina IA · 13 partite")
-    candidates = build_coupon_candidates(competitions)
-    if len(candidates) < 13:
-        st.info(f"Sono disponibili {len(candidates)} selezioni nel range 65%-70%; la schedina verra completata quando i dati sincronizzati offriranno altri eventi.")
+def render_daily_coupon() -> None:
+    st.subheader("Equalizzatore Universale")
+    st.caption("Copertura Sniper sulle simulazioni salvate e analizzate oggi.")
+    history = daily_history()
+    budget_col, mode_col, action_col = st.columns([1, 2, 1])
+    with budget_col:
+        budget = st.number_input("Budget complessivo (€)", min_value=1.0, max_value=100.0, value=10.0, step=1.0, key="daily_coupon_budget")
+    with mode_col:
+        mode = st.selectbox("Modalita", ["Multipla standard", "Sistema integrato"], key="daily_coupon_mode")
+    with action_col:
+        analyze = st.button("Analizza Schedina", type="primary", key="analyze_daily_coupon", width="stretch")
+    if analyze:
+        st.session_state["daily_coupon"] = build_sniper_coupon(history, budget, mode)
+    coupon = st.session_state.get("daily_coupon")
+    if not coupon:
+        st.info(f"Nessuna analisi odierna disponibile: {len(history)} sessioni salvate oggi.")
         return
-    display = pd.DataFrame([{key: value for key, value in item.items() if not key.startswith("_")} for item in candidates])
-    st.dataframe(display, width="stretch", hide_index=True)
-    combined_probability = math.prod(item["Probabilita"] / 100.0 for item in candidates) * 100.0
-    st.caption(f"Probabilita combinata teorica delle 13 selezioni: {combined_probability:.6f}% · quote stimate, non quote bookmaker reali.")
+    if not coupon["selections"]:
+        st.warning("Le sessioni odierne non contengono mercati utilizzabili per la copertura.")
+        return
+    st.caption(f"{coupon['covered_matches']} partite coperte · {coupon['combinations']} combinazioni · budget allocato: {coupon['budget']:.2f} €")
+    st.dataframe(pd.DataFrame(coupon["selections"]), width="stretch", hide_index=True)
 
 
 def render_history() -> None:
@@ -621,17 +876,23 @@ def render_history() -> None:
     if not history:
         return
     with st.expander("Cronologia analisi recenti"):
-        table = pd.DataFrame([
-            {"Data": item.get("created_at", "N/D"), "Partita": f"{item.get('home_team_name', 'Casa')} - {item.get('away_team_name', 'Ospite')}", "Simulazioni": item.get("simulations_count", 0), "Convergenza": item.get("best_convergence_market") or "N/D"}
-            for item in history
-        ])
-        st.dataframe(table, width="stretch", hide_index=True)
+        for item in history:
+            columns = st.columns([3, 2, 1])
+            with columns[0]:
+                st.write(f"**{item.get('home_team_name', 'Casa')} - {item.get('away_team_name', 'Ospite')}**")
+                st.caption(f"{item.get('created_at', 'N/D')} · {item.get('best_convergence_market') or 'Convergenza N/D'}")
+            with columns[1]:
+                st.caption(f"{item.get('simulations_count', 0):,} simulazioni")
+            with columns[2]:
+                if st.button("Esplora / Ricarica", key=f"history_reload_home_{item['id']}", width="stretch"):
+                    if reload_history_item(int(item["id"])):
+                        st.rerun()
 
 
 def render_main_navigation() -> None:
     """Menu principale centrale, indipendente dalla navigazione interna dei campionati."""
     labels = [
-        ("home", "Home / Schedina 13 Partite"),
+        ("home", "Home / Schedina"),
         ("championships", "Campionati"),
         ("custom", "Crea / Analizza Partita"),
         ("history", "Cronologia Partite Salvate"),
@@ -672,17 +933,20 @@ def render_saved_history_page() -> None:
     if not history:
         st.info("Non ci sono ancora simulazioni salvate.")
         return
-    table = pd.DataFrame([
-        {
-            "Data": item.get("created_at", "N/D"),
-            "Partita": f"{item.get('home_team_name', 'Casa')} - {item.get('away_team_name', 'Ospite')}",
-            "Simulazioni": item.get("simulations_count", 0),
-            "Convergenza": item.get("best_convergence_market") or "N/D",
-            "Value bet": item.get("best_value_bet_market") or "N/D",
-        }
-        for item in history
-    ])
-    st.dataframe(table, width="stretch", hide_index=True)
+    for item in history:
+        columns = st.columns([3, 2, 2, 1])
+        with columns[0]:
+            st.write(f"**{item.get('home_team_name', 'Casa')} - {item.get('away_team_name', 'Ospite')}**")
+            st.caption(item.get("created_at", "N/D"))
+        with columns[1]:
+            st.caption(f"{item.get('simulations_count', 0):,} simulazioni")
+        with columns[2]:
+            st.caption(f"Convergenza: {item.get('best_convergence_market') or 'N/D'}")
+            st.caption(f"Value bet: {item.get('best_value_bet_market') or 'N/D'}")
+        with columns[3]:
+            if st.button("Esplora / Ricarica", key=f"history_reload_{item['id']}", width="stretch"):
+                if reload_history_item(int(item["id"])):
+                    st.rerun()
 
 
 def init_navigation() -> None:
@@ -712,8 +976,8 @@ def navigation_header(title: str, back_page: Optional[str] = None, **back_values
 
 def render_home_page(competitions: List[Dict[str, Any]]) -> None:
     render_welcome(competitions)
+    render_daily_coupon()
     if competitions:
-        render_coupon(competitions)
         render_history()
     if competitions:
         st.subheader("Scegli un campionato")
@@ -861,6 +1125,7 @@ def render_match_page(league: Dict[str, Any], simulations: int, seed: int, home_
     st.dataframe(input_snapshot(home_team, away_team, match), width="stretch", hide_index=True)
     if st.button("🚀 Esegui Simulazione con Dati Manuali", type="primary", key=f"manual_simulation_{match['id']}", width="stretch"):
         result, home_team, away_team = run_api_match(match, home_team, away_team, advanced, simulations, seed, home_advantage, base_home, base_away, rho)
+        attach_replay_context(result, home_team, away_team, advanced)
         st.session_state["manual_analysis_result"] = result
         st.session_state["manual_analysis_context"] = (home_team, away_team, match)
     context = st.session_state.get("manual_analysis_context")
@@ -872,6 +1137,19 @@ def render_custom_page(simulations: int, seed: int, home_advantage: float, base_
     navigation_header("Nuova partita personalizzata", "home")
     defaults_home = {"name": "Squadra Casa", "attack": 1.15, "defense": 0.95, "elo": 1550.0, "cards_factor": 1.0, "corners_factor": 1.0, "recent_form": "W-D-W-D-W", "xg_for": None, "xg_against": None}
     defaults_away = {"name": "Squadra Ospite", "attack": 1.05, "defense": 1.05, "elo": 1500.0, "cards_factor": 1.0, "corners_factor": 1.0, "recent_form": "D-W-L-D-W", "xg_for": None, "xg_against": None}
+    paste = st.text_area(
+        "Incolla dati partita (parser flessibile)",
+        placeholder="Casa:\nNome: Inter\nAttacco: 1,30\nElo: 1820\n\nOspite:\nNome: Milan\nDifesa: 1.05",
+        key="custom_paste_data",
+        height=150,
+    )
+    if st.button("Mappa dati incollati", key="map_custom_paste", width="stretch"):
+        parsed = parse_team_paste(paste)
+        apply_pasted_values(parsed, "custom")
+        st.session_state["custom_paste_status"] = f"Mappati {len(parsed)} campi; i campi non presenti sono rimasti invariati."
+        st.rerun()
+    if st.session_state.get("custom_paste_status"):
+        st.caption(st.session_state["custom_paste_status"])
     left, right = st.columns(2)
     with left:
         home_team = team_editor("Casa", defaults_home, "custom_home")
@@ -883,6 +1161,7 @@ def render_custom_page(simulations: int, seed: int, home_advantage: float, base_
         config = MatchConfig(home_team=home_team, away_team=away_team, home_advantage=home_advantage, base_goals_home=base_home, base_goals_away=base_away, dixon_coles_rho=rho, n_simulations=simulations, seed=seed, **normalize_advanced_config(advanced))
         with st.spinner("Calcolo simulazione Monte Carlo..."):
             st.session_state["custom_result"] = simulate_match(config, custom_odds=odds)
+            attach_replay_context(st.session_state["custom_result"], home_team, away_team, advanced, odds)
             st.session_state["custom_context"] = (home_team, away_team)
     if "custom_result" in st.session_state:
         home, away = st.session_state["custom_context"]

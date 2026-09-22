@@ -575,6 +575,91 @@ def simulate_match(config: MatchConfig) -> Dict[str, Any]:
         m_over_away[f"Over_{t}"] = _calc_stat(away_ft > t, n_sims)
         m_over_away[f"Under_{t}"] = _calc_stat(away_ft < t, n_sims)
 
+def normalize_market_odds(odds_dict: Optional[Dict[str, Optional[float]]] = None) -> Dict[str, Dict[str, Any]]:
+    """Rimuove l'aggio normalizzando le probabilita inverse per ogni lavagna."""
+    raw: Dict[str, Dict[str, float]] = {}
+    aliases = {"1": "1x2_finale", "X": "1x2_finale", "2": "1x2_finale"}
+    for key, value in (odds_dict or {}).items():
+        try:
+            odds = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(odds) or odds <= 1.0:
+            continue
+        if ":" in key:
+            category, selection = key.split(":", 1)
+        else:
+            category, selection = aliases.get(key, "over_under_finale"), key
+        raw.setdefault(category, {})[selection] = odds
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for category, selections in raw.items():
+        inverse = {selection: 1.0 / odds for selection, odds in selections.items()}
+        total = sum(inverse.values())
+        if total <= 0.0:
+            continue
+        normalized[category] = {
+            "overround": total,
+            "margin_pct": round((total - 1.0) * 100.0, 3),
+            "probabilities": {selection: probability / total for selection, probability in inverse.items()},
+            "odds": selections,
+        }
+    return normalized
+
+
+def _market_probabilities(lambda_: float, mu: float) -> Dict[str, Dict[str, float]]:
+    """Calcola probabilita teoriche Poisson per calibrare le quote bookmaker."""
+    goals = np.arange(13)
+    home, away = np.meshgrid(goals, goals, indexing="ij")
+    joint = np.outer(poisson.pmf(goals, lambda_), poisson.pmf(goals, mu))
+    total = home + away
+    probabilities: Dict[str, Dict[str, float]] = {
+        "1x2_finale": {
+            "1": float(joint[home > away].sum()), "X": float(joint[home == away].sum()), "2": float(joint[home < away].sum())
+        },
+        "goal_nogoal_finale": {
+            "Goal": float(joint[(home > 0) & (away > 0)].sum()),
+            "No_Goal": float(joint[(home == 0) | (away == 0)].sum()),
+        },
+    }
+    for threshold in (0.5, 1.5, 2.5, 3.5, 4.5):
+        probabilities.setdefault("over_under_finale", {})[f"Over_{threshold}"] = float(joint[total > threshold].sum())
+        probabilities["over_under_finale"][f"Under_{threshold}"] = float(joint[total < threshold].sum())
+    return probabilities
+
+
+def calibrate_expected_goals(lambda_: float, mu: float, odds_dict: Optional[Dict[str, Optional[float]]] = None) -> Tuple[float, float, Dict[str, Any]]:
+    """Calibra i tassi Poisson sui mercati quote disponibili, senza inventare mercati mancanti."""
+    normalized = normalize_market_odds(odds_dict)
+    targets = normalized.get("1x2_finale", {}).get("probabilities", {})
+    total_targets = normalized.get("over_under_finale", {}).get("probabilities", {})
+    goal_targets = normalized.get("goal_nogoal_finale", {}).get("probabilities", {})
+    if not targets and not total_targets and not goal_targets:
+        return lambda_, mu, {"applied": False, "markets": {}, "base_lambda": lambda_, "base_mu": mu}
+    best = (float("inf"), lambda_, mu)
+    for candidate_lambda in np.linspace(0.20, 3.50, 67):
+        for candidate_mu in np.linspace(0.20, 3.50, 67):
+            predicted = _market_probabilities(float(candidate_lambda), float(candidate_mu))
+            error = 0.0
+            for selection, target in targets.items():
+                error += (predicted["1x2_finale"].get(selection, 0.0) - target) ** 2
+            for selection, target in total_targets.items():
+                error += (predicted["over_under_finale"].get(selection, 0.0) - target) ** 2
+            for selection, target in goal_targets.items():
+                error += (predicted["goal_nogoal_finale"].get(selection, 0.0) - target) ** 2
+            if error < best[0]:
+                best = (error, float(candidate_lambda), float(candidate_mu))
+    return best[1], best[2], {
+        "applied": True,
+        "markets": sorted(normalized),
+        "base_lambda": lambda_,
+        "base_mu": mu,
+        "calibrated_lambda": best[1],
+        "calibrated_mu": best[2],
+        "fit_error": round(best[0], 8),
+        "normalized_probabilities": {category: data["probabilities"] for category, data in normalized.items()},
+    }
+
+
 def calculate_value_bets(markets: Dict[str, Any], odds_dict: Optional[Dict[str, Optional[float]]] = None) -> Dict[str, Any]:
     """
     Confronta la percentuale d'uscita delle 50.000 simulazioni con la quota del bookmaker.
@@ -584,6 +669,7 @@ def calculate_value_bets(markets: Dict[str, Any], odds_dict: Optional[Dict[str, 
     """
     candidates = []
     odds_dict = odds_dict or {}
+    normalized = normalize_market_odds(odds_dict)
 
     def parse_odds(raw_odds: Any) -> Optional[float]:
         if raw_odds is None or (isinstance(raw_odds, str) and not raw_odds.strip()):
@@ -602,7 +688,7 @@ def calculate_value_bets(markets: Dict[str, Any], odds_dict: Optional[Dict[str, 
         if not stat or quota <= 1.0:
             return
         p_sim = float(stat["percentage"]) / 100.0
-        p_imp = 1.0 / quota
+        p_imp = normalized.get(category, {}).get("probabilities", {}).get(market_key, 1.0 / quota)
         ev = (p_sim * quota) - 1.0
         candidates.append({
             "market": f"{category}: {market_key.replace('_', ' ')}",
@@ -611,6 +697,7 @@ def calculate_value_bets(markets: Dict[str, Any], odds_dict: Optional[Dict[str, 
             "odds": quota,
             "simulated_prob_pct": round(p_sim * 100.0, 2),
             "implied_prob_pct": round(p_imp * 100.0, 2),
+            "raw_implied_prob_pct": round((1.0 / quota) * 100.0, 2),
             "edge_pct": round((p_sim - p_imp) * 100.0, 2),
             "ev_pct": round(ev * 100.0, 2),
             "is_value": ev > 0.02,
@@ -620,7 +707,7 @@ def calculate_value_bets(markets: Dict[str, Any], odds_dict: Optional[Dict[str, 
     for quote_key, quote in odds_dict.items():
         if ":" in quote_key:
             category, market_key = quote_key.split(":", 1)
-            add_candidate(category, market_key, float(quote))
+            add_candidate(category, market_key, quote)
 
     # Compatibilita con le quote storiche piatte del motore.
     for sign in ["1", "X", "2"]:
@@ -865,6 +952,7 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
 
     # 1. Calcolo tassi attesi di gol
     lambda_, mu = calculate_expected_goals(config)
+    lambda_, mu, bookmaker_calibration = calibrate_expected_goals(lambda_, mu, custom_odds)
 
     # 2. Campionamento Monte Carlo stocastico direttamente dai lambda.
     home_ft = np.random.poisson(lam=lambda_, size=n_sims).astype(np.int32)
@@ -1094,17 +1182,34 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
         "over_under_squadra_ospite": m_over_away,
     }
 
-    def _mode_pair(first: np.ndarray, second: np.ndarray) -> Tuple[int, int]:
+    def _mode_pair(first: np.ndarray, second: np.ndarray, outcome: Optional[str] = None) -> Tuple[int, int]:
         pairs, counts = np.unique(np.column_stack((first, second)), axis=0, return_counts=True)
+        if outcome is not None:
+            if outcome == "1":
+                valid = pairs[:, 0] > pairs[:, 1]
+            elif outcome == "2":
+                valid = pairs[:, 1] > pairs[:, 0]
+            else:
+                valid = pairs[:, 0] == pairs[:, 1]
+            if np.any(valid):
+                pairs = pairs[valid]
+                counts = counts[valid]
         mode = pairs[int(np.argmax(counts))]
         return int(mode[0]), int(mode[1])
 
     predicted_ht = _mode_pair(home_ht, away_ht)
     predicted_2h = _mode_pair(home_2h, away_2h)
-    predicted_ft = _mode_pair(home_ft, away_ft)
+    predicted_outcome = max(
+        ("1", m_1x2_ft["1"]["count"]),
+        ("X", m_1x2_ft["X"]["count"]),
+        ("2", m_1x2_ft["2"]["count"]),
+        key=lambda item: item[1],
+    )[0]
+    predicted_ft = _mode_pair(home_ft, away_ft, predicted_outcome)
 
     # 8. Le quote sono solo un filtro opzionale per il Value Betting.
     market_odds = custom_odds or {}
+    normalized_market_odds = normalize_market_odds(market_odds)
     value_betting = calculate_value_bets(all_markets, market_odds)
     value_betting = validate_value_bets_against_score(value_betting, *predicted_ft)
 
@@ -1132,6 +1237,7 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
             "away_team": config.away_team.name,
             "expected_goals_home_lambda": round(lambda_, 3),
             "expected_goals_away_mu": round(mu, 3),
+            "bookmaker_calibration": bookmaker_calibration,
             "organic_expected_goals_home": round(calculate_expected_goals(MatchConfig(
                 home_team=TeamParams(
                     name=config.home_team.name,
@@ -1186,11 +1292,13 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
                 "second_half": {"home": predicted_2h[0], "away": predicted_2h[1]},
                 "full_time": {"home": predicted_ft[0], "away": predicted_ft[1]},
             },
+            "predicted_outcome": predicted_outcome,
             "model": "Bivariate Poisson with Dixon-Coles Correction (Monte Carlo Vectorized)"
         },
         "markets": all_markets,
         "market_convergence": convergence,
         "value_betting": value_betting,
         "market_odds": market_odds,
+        "market_odds_normalized": normalized_market_odds,
         "ai_narrative": ai_narrative,
     }
