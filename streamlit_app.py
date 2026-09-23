@@ -119,7 +119,7 @@ def _optional_number(value: Any) -> Optional[float]:
 def parse_team_paste(text: str) -> Dict[str, Any]:
     """Estrae campi squadra e avanzati da testo libero senza inventare valori."""
     parsed: Dict[str, Any] = {"bookmaker_odds": parse_bookmaker_odds(text)}
-    section = "home"
+    section: Optional[str] = None
     aliases = {
         "nome": "name", "squadra": "name", "nome casa": "home_name", "nome ospite": "away_name",
         "casa": "home_name", "home": "home_name", "ospite": "away_name", "away": "away_name",
@@ -142,16 +142,26 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
         if not line:
             continue
         normalized_line = re.sub(r"[^a-z0-9]+", " ", line.lower()).strip()
-        section_match = re.match(
-            r"^(?:parametri\s+)?(casa|home|ospite|away)(?:\s+(?:team|squadra))?\s*$",
-            normalized_line,
-            re.I,
-        )
-        if section_match:
-            section = "home" if section_match.group(1).lower() in {"casa", "home"} else "away"
+        section_headers = {
+            "casa": "home",
+            "parametri casa": "home",
+            "home": "home",
+            "parametri home": "home",
+            "ospite": "away",
+            "parametri ospite": "away",
+            "away": "away",
+            "parametri away": "away",
+            "profilo arbitrale": "referee",
+            "arbitro": "referee",
+            "quote": "odds",
+            "quote bookmaker": "odds",
+            "odds": "odds",
+            "bookmaker": "odds",
+        }
+        if normalized_line in section_headers:
+            section = section_headers[normalized_line]
             continue
-        if re.match(r"^(?:profilo\s+)?arbitral|quote|odds|bookmaker", normalized_line):
-            section = "referee" if "arbit" in normalized_line else "odds"
+        if section is None or section == "odds":
             continue
         match = re.match(r"^\s*([^:=\-]+?)\s*[:=\-]\s*(.*?)\s*$", line)
         if not match:
@@ -162,8 +172,9 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
         if field is None:
             continue
         if field in {"home_name", "away_name"}:
-            parsed[field] = raw_value.strip()
-            section = "home" if field == "home_name" else "away"
+            expected_section = "home" if field == "home_name" else "away"
+            if section == expected_section:
+                parsed[field] = raw_value.strip()
             continue
         if field == "name":
             parsed[f"{section}_name"] = raw_value.strip()
