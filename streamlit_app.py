@@ -141,9 +141,17 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
         line = raw_line.strip()
         if not line:
             continue
-        section_match = re.match(r"^(?:\[?\s*)?(casa|home|ospite|away)(?:\s*\]?)\s*:?\s*$", line, re.I)
+        normalized_line = re.sub(r"[^a-z0-9]+", " ", line.lower()).strip()
+        section_match = re.match(
+            r"^(?:parametri\s+)?(casa|home|ospite|away)(?:\s+(?:team|squadra))?\s*$",
+            normalized_line,
+            re.I,
+        )
         if section_match:
             section = "home" if section_match.group(1).lower() in {"casa", "home"} else "away"
+            continue
+        if re.match(r"^(?:profilo\s+)?arbitral|quote|odds|bookmaker", normalized_line):
+            section = "referee" if "arbit" in normalized_line else "odds"
             continue
         match = re.match(r"^\s*([^:=\-]+?)\s*[:=\-]\s*(.*?)\s*$", line)
         if not match:
@@ -177,17 +185,31 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
                 parsed[f"{section}_momentum"] = number
             elif field.startswith("referee_"):
                 parsed[field] = number
-            else:
+            elif section in {"home", "away"}:
                 parsed[f"{section}_{field}"] = number
+            else:
+                parsed[field] = number
     return parsed
 
 
 def parse_bookmaker_odds(text: str) -> Dict[str, float]:
-    """Legge quote bookmaker in formato libero e restituisce categoria:selezione."""
+    """Legge quote bookmaker multilinea, ignorando simboli e formati non canonici."""
     odds: Dict[str, float] = {}
     for raw_line in text.splitlines():
-        line = raw_line.strip()
-        lowered = line.lower().replace(",", ".")
+        lowered = re.sub(r"\s+", " ", raw_line.lower().replace(",", ".")).strip()
+        one_x_two = re.search(r"\b1\s*x\s*2\b(.*)", lowered)
+        if one_x_two:
+            category = "1x2_primo_tempo" if "primo" in lowered or "1t" in lowered else "1x2_finale"
+            outcomes = re.findall(
+                r"(?:^|\s|[:=@])([12x])\s*(?:[:=@]\s*)?(\d+(?:\.\d+)?)",
+                one_x_two.group(1),
+            )
+            if len(outcomes) > 1:
+                for outcome, raw_quote in outcomes:
+                    parsed_quote = float(raw_quote)
+                    if parsed_quote > 1.0:
+                        odds[f"{category}:{outcome.upper()}"] = parsed_quote
+                continue
         number_matches = list(re.finditer(r"(?<![\d.])\d+(?:\.\d+)?", lowered))
         if not number_matches:
             continue
@@ -195,17 +217,28 @@ def parse_bookmaker_odds(text: str) -> Dict[str, float]:
         quote = float(quote_match.group())
         if quote <= 1.0:
             continue
-        before_quote = lowered[:quote_match.start()]
+        before_quote = re.sub(r"[()%€$]", " ", lowered[:quote_match.start()])
         category = None
         selection = None
-        if "1x2" in before_quote:
+        if re.search(r"\b1\s*x\s*2\b", before_quote):
             category = "1x2_primo_tempo" if "primo" in before_quote or "1t" in before_quote else "1x2_finale"
-            selection_match = re.search(r"(?:^|[:=@\s])([12x])\s*(?:[@:=]|$)", before_quote)
+            selection_match = re.search(r"(?:^|\s|[:=@])([12x])(?:\s*(?:[:=@]|$))", before_quote)
             selection = selection_match.group(1).upper() if selection_match else None
-        elif "goal" in before_quote or "no goal" in before_quote:
+            if selection is None:
+                market_match = re.search(r"\b1\s*x\s*2\b(.*)", lowered)
+                if market_match:
+                    for outcome, raw_quote in re.findall(
+                        r"(?:^|\s|[:=@])([12x])\s*(?:[:=@]\s*)?(\d+(?:\.\d+)?)",
+                        market_match.group(1),
+                    ):
+                        parsed_quote = float(raw_quote)
+                        if parsed_quote > 1.0:
+                            odds[f"{category}:{outcome.upper()}"] = parsed_quote
+                continue
+        elif re.search(r"\bno\s*-?\s*goal\b|\bgoal\b", before_quote):
             category = "goal_nogoal_primo_tempo" if "primo" in before_quote or "1t" in before_quote else "goal_nogoal_finale"
-            selection = "No_Goal" if "no goal" in before_quote else "Goal"
-        elif "over" in before_quote or "under" in before_quote:
+            selection = "No_Goal" if re.search(r"no\s*-?\s*goal", before_quote) else "Goal"
+        elif re.search(r"\b(?:over|under)\b", before_quote):
             side = "finale"
             if "primo" in before_quote or "1t" in before_quote:
                 side = "primo_tempo"
@@ -226,11 +259,11 @@ def parse_bookmaker_odds(text: str) -> Dict[str, float]:
             else:
                 category = f"over_under_{side}"
             market_match = re.search(
-                r"\b(over|under)(?:\s+(?:finale|primo\s+tempo|casa|ospite|trasferta|cartellini|corner|angoli|falli))*\s*(\d+(?:\.\d+)?)",
+                r"\b(over|under)\b.*?((?:\d+)(?:\.\d+)?)",
                 before_quote,
             )
             selection = f"{market_match.group(1).capitalize()}_{market_match.group(2)}" if market_match else None
-        elif "multigol" in before_quote or "multi gol" in before_quote:
+        elif re.search(r"\bmulti\s*gol\b", before_quote):
             if "tempi" in before_quote or "1t" in before_quote or "2t" in before_quote:
                 category = "multigol_primo_tempo_combo_secondo_tempo"
                 ranges = re.findall(r"\d+\s*[-/]\s*\d+", before_quote)
@@ -282,6 +315,9 @@ def apply_pasted_values(parsed: Dict[str, Any], widget_prefix: str) -> None:
             selected = next((option for option in options if option.lower() in normalized or normalized in option.lower()), None)
             if selected:
                 st.session_state[f"{widget_prefix}_{side}_stakes"] = selected
+    for state_key in list(st.session_state):
+        if state_key.startswith("odds_"):
+            st.session_state[state_key] = None
     for quote_key, quote in parsed.get("bookmaker_odds", {}).items():
         st.session_state[f"odds_{quote_key.replace(':', '_')}"] = quote
 
@@ -336,14 +372,22 @@ def team_editor(label: str, defaults: Dict[str, Any], widget_key: str) -> TeamPa
     name = st.text_input("Nome", value=defaults["name"], key=f"{widget_key}_name")
     col_a, col_b = st.columns(2)
     with col_a:
+        st.caption(label)
         attack = st.number_input("Attacco", min_value=0.2, max_value=3.0, value=defaults["attack"], step=0.01, key=f"{widget_key}_attack")
+        st.caption(label)
         elo = st.number_input("Elo", min_value=800.0, max_value=2400.0, value=defaults["elo"], step=5.0, key=f"{widget_key}_elo")
+        st.caption(label)
         cards_factor = st.number_input("Fattore cartellini", min_value=0.2, max_value=5.0, value=defaults["cards_factor"], step=0.01, key=f"{widget_key}_cards")
+        st.caption(label)
         xg_for = st.number_input("xG fatti (opzionale)", min_value=0.0, max_value=10.0, value=defaults.get("xg_for"), step=0.01, key=f"{widget_key}_xg_for")
     with col_b:
+        st.caption(label)
         defense = st.number_input("Difesa", min_value=0.2, max_value=3.0, value=defaults["defense"], step=0.01, key=f"{widget_key}_defense")
+        st.caption(label)
         recent_form = st.text_input("Forma recente", value=defaults["recent_form"], key=f"{widget_key}_form")
+        st.caption(label)
         corners_factor = st.number_input("Fattore corner", min_value=0.0, max_value=100.0, value=defaults["corners_factor"], step=0.1, key=f"{widget_key}_corners")
+        st.caption(label)
         xg_against = st.number_input("xG subiti (opzionale)", min_value=0.0, max_value=10.0, value=defaults.get("xg_against"), step=0.01, key=f"{widget_key}_xg_against")
     return TeamParams(
         name=name.strip() or label,

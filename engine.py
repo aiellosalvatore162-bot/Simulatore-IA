@@ -624,6 +624,26 @@ def _market_probabilities(lambda_: float, mu: float) -> Dict[str, Dict[str, floa
     for threshold in (0.5, 1.5, 2.5, 3.5, 4.5):
         probabilities.setdefault("over_under_finale", {})[f"Over_{threshold}"] = float(joint[total > threshold].sum())
         probabilities["over_under_finale"][f"Under_{threshold}"] = float(joint[total < threshold].sum())
+    for category, values in (
+        ("over_under_squadra_casa", home),
+        ("over_under_squadra_ospite", away),
+    ):
+        for threshold in (0.5, 1.5, 2.5, 3.5):
+            probabilities.setdefault(category, {})[f"Over_{threshold}"] = float(joint[values > threshold].sum())
+            probabilities[category][f"Under_{threshold}"] = float(joint[values < threshold].sum())
+    for category, lower, upper in (
+        ("multigol_partita", 0, 2),
+        ("multigol_partita", 1, 3),
+        ("multigol_partita", 2, 4),
+        ("multigol_casa", 0, 2),
+        ("multigol_casa", 1, 3),
+        ("multigol_casa", 2, 4),
+        ("multigol_ospite", 0, 2),
+        ("multigol_ospite", 1, 3),
+        ("multigol_ospite", 2, 4),
+    ):
+        values = total if category == "multigol_partita" else home if category == "multigol_casa" else away
+        probabilities.setdefault(category, {})[f"{lower}_{upper}"] = float(joint[(values >= lower) & (values <= upper)].sum())
     return probabilities
 
 
@@ -633,7 +653,18 @@ def calibrate_expected_goals(lambda_: float, mu: float, odds_dict: Optional[Dict
     targets = normalized.get("1x2_finale", {}).get("probabilities", {})
     total_targets = normalized.get("over_under_finale", {}).get("probabilities", {})
     goal_targets = normalized.get("goal_nogoal_finale", {}).get("probabilities", {})
-    if not targets and not total_targets and not goal_targets:
+    advanced_targets = {
+        category: data.get("probabilities", {})
+        for category, data in normalized.items()
+        if category in {
+            "over_under_squadra_casa",
+            "over_under_squadra_ospite",
+            "multigol_partita",
+            "multigol_casa",
+            "multigol_ospite",
+        }
+    }
+    if not targets and not total_targets and not goal_targets and not any(advanced_targets.values()):
         return lambda_, mu, {"applied": False, "markets": {}, "base_lambda": lambda_, "base_mu": mu}
     best = (float("inf"), lambda_, mu)
     for candidate_lambda in np.linspace(0.20, 3.50, 67):
@@ -646,6 +677,9 @@ def calibrate_expected_goals(lambda_: float, mu: float, odds_dict: Optional[Dict
                 error += (predicted["over_under_finale"].get(selection, 0.0) - target) ** 2
             for selection, target in goal_targets.items():
                 error += (predicted["goal_nogoal_finale"].get(selection, 0.0) - target) ** 2
+            for category, category_targets in advanced_targets.items():
+                for selection, target in category_targets.items():
+                    error += (predicted.get(category, {}).get(selection, 0.0) - target) ** 2
             if error < best[0]:
                 best = (error, float(candidate_lambda), float(candidate_mu))
     return best[1], best[2], {
