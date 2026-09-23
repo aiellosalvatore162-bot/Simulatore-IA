@@ -118,7 +118,7 @@ def _optional_number(value: Any) -> Optional[float]:
 
 def parse_team_paste(text: str) -> Dict[str, Any]:
     """Estrae campi squadra e avanzati da testo libero senza inventare valori."""
-    parsed: Dict[str, Any] = {"bookmaker_odds": parse_bookmaker_odds(text)}
+    parsed: Dict[str, Any] = {"bookmaker_odds": {}}
     section: Optional[str] = None
     aliases = {
         "nome": "name", "squadra": "name", "nome casa": "home_name", "nome ospite": "away_name",
@@ -161,13 +161,35 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
         if normalized_line in section_headers:
             section = section_headers[normalized_line]
             continue
-        if section is None or section == "odds":
+
+        if ":" not in line:
             continue
-        match = re.match(r"^\s*([^:=\-]+?)\s*[:=\-]\s*(.*?)\s*$", line)
-        if not match:
-            continue
-        raw_key, raw_value = match.groups()
+
+        raw_key, raw_value = line.split(":", 1)
+        raw_key = raw_key.strip()
+        raw_value = raw_value.strip()
         key = re.sub(r"\s+", " ", raw_key.lower().replace("_", " ").replace("/", " ").replace("%", "").strip())
+
+        for prefix, prefixed_section in (("casa ", "home"), ("ospite ", "away")):
+            if key.startswith(prefix):
+                section = prefixed_section
+                key = key[len(prefix):].strip()
+                break
+
+        if section is None:
+            continue
+
+        if section == "odds":
+            if key in {"1x2 finale", "1x2 primo tempo"}:
+                values = re.findall(r"\d+(?:[.,]\d+)?", raw_value)
+                if len(values) >= 3:
+                    category = "1x2_finale" if key == "1x2 finale" else "1x2_primo_tempo"
+                    for selection, quote in zip(("1", "X", "2"), values[:3]):
+                        parsed["bookmaker_odds"][f"{category}:{selection}"] = float(quote.replace(",", "."))
+            else:
+                parsed["bookmaker_odds"].update(parse_bookmaker_odds(line))
+            continue
+
         field = aliases.get(key)
         if field is None:
             continue
