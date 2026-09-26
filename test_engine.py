@@ -191,6 +191,28 @@ def test_different_xg_inputs_change_probabilities():
     assert high["markets"]["1x2_finale"]["1"]["percentage"] > low["markets"]["1x2_finale"]["1"]["percentage"]
 
 
+def test_raw_corner_factors_are_normalized_to_a_realistic_line():
+    result = simulate_match(MatchConfig(
+        home_team=TeamParams(name="Home", corners_factor=4.4),
+        away_team=TeamParams(name="Away", corners_factor=3.9),
+        n_simulations=20_000,
+        seed=31,
+    ))
+    corner_mean = result["markets"]["calci_dangolo"]["expected_mean"]
+    assert 7.5 <= corner_mean <= 10.5
+
+
+def test_solid_low_xg_defenses_keep_goal_market_below_fifty_percent():
+    result = simulate_match(MatchConfig(
+        home_team=TeamParams(name="Home", attack=0.9, defense=0.7, xg_for=0.8, xg_against=0.7),
+        away_team=TeamParams(name="Away", attack=0.9, defense=0.7, xg_for=0.8, xg_against=0.7),
+        n_simulations=20_000,
+        seed=32,
+    ))
+    goal_probability = result["markets"]["goal_nogoal_finale"]["Goal"]["percentage"]
+    assert goal_probability <= 50.0
+
+
 if __name__ == "__main__":
     test_simulation_50k_consistency()
     print("Tutti i test sono stati superati con successo!")

@@ -68,6 +68,24 @@ def _momentum_volatility(value: float) -> float:
     return float(np.clip(0.85 + 0.03 * np.clip(value, 0.0, 10.0), 0.85, 1.15))
 
 
+def _normalize_corner_factor(value: float) -> float:
+    """Converte il volume corner grezzo in un coefficiente centrato su 1.0."""
+    factor = max(0.0, float(value))
+    if factor <= 2.0:
+        return float(np.clip(factor, 0.55, 1.45))
+    return float(np.clip(factor / 4.50, 0.55, 1.45))
+
+
+def _defensive_resistance(defense: float, xg_against: Optional[float], base_goals: float) -> float:
+    """Riduce la produzione avversaria quando difesa e xG concessi sono solidi."""
+    defense_signal = float(np.clip(0.65 + 0.35 * defense, 0.70, 1.30))
+    if xg_against is None:
+        xg_signal = 1.0
+    else:
+        xg_signal = float(np.clip(0.75 + 0.25 * (xg_against / base_goals), 0.70, 1.30))
+    return float(np.clip(0.60 * defense_signal + 0.40 * xg_signal, 0.72, 1.28))
+
+
 def calculate_team_strength(team: TeamParams) -> float:
     """Punteggio organico 0-100, esplicito e composto da Elo, attacco, difesa e forma."""
     form_points = {"W": 1.0, "D": 0.5, "L": 0.0}
@@ -138,9 +156,16 @@ def calculate_expected_goals(config: MatchConfig) -> Tuple[float, float]:
         away_form, -delta_elo, config.base_goals_away,
     )
 
-    lambda_ = config.base_goals_home * config.home_advantage * home_strength
+    home_resistance = _defensive_resistance(
+        config.away_team.defense, config.away_team.xg_against, config.base_goals_home
+    )
+    away_resistance = _defensive_resistance(
+        config.home_team.defense, config.home_team.xg_against, config.base_goals_away
+    )
+
+    lambda_ = config.base_goals_home * config.home_advantage * home_strength * home_resistance
     lambda_ *= home_availability * (1.0 + 0.10 * float(np.clip(config.away_absence_impact, 0.0, 1.0)))
-    mu = config.base_goals_away * away_strength
+    mu = config.base_goals_away * away_strength * away_resistance
     mu *= away_availability * (1.0 + 0.10 * float(np.clip(config.home_absence_impact, 0.0, 1.0)))
 
     lambda_ = float(np.clip(lambda_, 0.20, 3.50))
@@ -402,9 +427,14 @@ def simulate_match(config: MatchConfig) -> Dict[str, Any]:
     exp_cards = max(1.0, min(22.0, exp_cards))
     cards = np.random.poisson(lam=exp_cards, size=n_sims)
 
-    # Corner: base 9.8, influenzati da volume offensivo (lambda + mu)
-    exp_corners = 9.8 * ((lambda_ + mu) / 2.5) * ((config.home_team.corners_factor + config.away_team.corners_factor) / 2.0) * intensity_factor
-    exp_corners = max(5.0, exp_corners)
+    # Corner: fattori grezzi (es. 4.40) normalizzati rispetto a 4.50 corner per squadra.
+    corner_volume = float(np.clip(0.88 + 0.10 * ((lambda_ + mu) / 2.5), 0.82, 1.08))
+    corner_factor = (
+        _normalize_corner_factor(config.home_team.corners_factor)
+        + _normalize_corner_factor(config.away_team.corners_factor)
+    ) / 2.0
+    exp_corners = 9.5 * corner_factor * corner_volume * float(np.clip(intensity_factor, 0.85, 1.15))
+    exp_corners = float(np.clip(exp_corners, 6.5, 13.5))
     corners = np.random.poisson(lam=exp_corners, size=n_sims)
 
     # Falli: stima indipendente ma coerente con intensità e propensione ai cartellini.
@@ -1025,8 +1055,13 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
     card_rates = np.random.gamma(card_shape, max(referee_dispersion - 1.0, 0.01), size=n_sims) if referee_dispersion > 1.01 else exp_cards
     cards = np.random.poisson(lam=card_rates, size=n_sims)
 
-    exp_corners = 9.8 * ((lambda_ + mu) / 2.5) * ((config.home_team.corners_factor + config.away_team.corners_factor) / 2.0) * intensity_factor
-    exp_corners = max(5.0, exp_corners)
+    corner_volume = float(np.clip(0.88 + 0.10 * ((lambda_ + mu) / 2.5), 0.82, 1.08))
+    corner_factor = (
+        _normalize_corner_factor(config.home_team.corners_factor)
+        + _normalize_corner_factor(config.away_team.corners_factor)
+    ) / 2.0
+    exp_corners = 9.5 * corner_factor * corner_volume * float(np.clip(intensity_factor, 0.85, 1.15))
+    exp_corners = float(np.clip(exp_corners, 6.5, 13.5))
     corners = np.random.poisson(lam=exp_corners, size=n_sims)
 
     # Falli: stima dinamica coerente con intensità e propensione ai cartellini.
