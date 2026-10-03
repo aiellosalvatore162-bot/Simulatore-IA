@@ -108,7 +108,7 @@ def test_api_simulate_with_database():
     assert meta["database_source"]["home_team_elo"] > 1750.0
 
     # Verifica mercati
-    assert len(data["markets"]) == 15
+    assert len(data["markets"]) == 16
     assert "best_synergy_market" in data["market_convergence"]
 
 
@@ -126,7 +126,7 @@ def test_api_simulate_ignores_empty_bookmaker_odds():
     data = response.json()
     assert data["market_odds"] == {}
     assert data["value_betting"]["best_value_bet"] is None
-    assert len(data["markets"]) == 15
+    assert len(data["markets"]) == 16
 
 
 def test_api_simulate_get_endpoint():

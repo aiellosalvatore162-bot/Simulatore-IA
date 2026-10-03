@@ -69,7 +69,6 @@ streamlit run streamlit_app.py
 
 L'interfaccia consente di inserire i parametri delle due squadre, eseguire la
 simulazione e consultare tabelle e grafici per tutti i mercati. Le quote
-bookmaker sono facoltative: se lasciate vuote, la simulazione viene comunque
 eseguita e il value betting viene semplicemente omesso.
 
 ---
@@ -83,7 +82,6 @@ Puoi passare direttamente `match_id` o `home_team_id` e `away_team_id` (il serve
 ```bash
 curl -X POST "http://127.0.0.1:8000/api/simulate" \
   -H "Content-Type: application/json" \
-  -d '{
     "home_team_id": 1,
     "away_team_id": 2,
     "n_simulations": 50000
@@ -98,7 +96,6 @@ curl -X POST "http://127.0.0.1:8000/api/simulate" \
     "match_id": 12,
     "n_simulations": 50000
   }'
-```
 
 #### Chiamata GET rapida
 ```bash
@@ -120,13 +117,11 @@ curl "http://127.0.0.1:8000/api/simulate?home_team_id=1&away_team_id=2"
 | `GET` | `/api/matches/{id}` | Dettaglio match |
 
 ---
-
 ### 3. Conclusione Match e Ricalcolo Dinamico (`POST /api/matches/{id}/complete`)
 Segna una partita come conclusa e ricalcola in automatico Classifica, Elo e Forma:
 ```bash
 curl -X POST "http://127.0.0.1:8000/api/matches/12/complete" \
   -H "Content-Type: application/json" \
-  -d '{
     "home_goals": 2,
     "away_goals": 1,
     "home_xg": 1.95,
@@ -136,13 +131,9 @@ curl -X POST "http://127.0.0.1:8000/api/matches/12/complete" \
 
 ---
 
-## ðŸ“Š I 16 Mercati Calcolati
-
-Per ciascun mercato vengono restituiti sia `count` esatto su 50.000 simulazioni che `percentage`:
 1. **1X2 finale** (`1`, `X`, `2`)
 2. **1X2 primo tempo** (`1`, `X`, `2`)
 3. **Over / Under finale** (0.5, 1.5, 2.5, 3.5, 4.5)
-4. **Over / Under primo tempo** (0.5, 1.5, 2.5, 3.5, 4.5)
 5. **Goal / No Goal finale** (`Goal`, `No_Goal`)
 6. **Goal / No Goal primo tempo** (`Goal`, `No_Goal`)
 7. **Cartellini**: media attesa, Over/Under (3.5, 4.5, 5.5) e fasce (`0-3`, `4-5`, `6+`)
@@ -168,3 +159,17 @@ Il modulo analizza le co-occorrenze su 50.000 simulazioni calcolando probabilitÃ
 ```bash
 pytest test_engine.py test_database.py
 ```
+
+## Metriche analitiche avanzate
+
+Il risultato di `simulate_match` include anche `advanced_analytics`, un blocco
+additivo che non modifica `markets`, `market_convergence` o `value_betting`:
+- **xPts**: punti attesi per partita derivati dalle probabilita Monte Carlo di vittoria, pareggio e sconfitta.
+- **Intervalli di confidenza Wilson al 95%** per gli esiti 1X2 e intervallo statistico per gli xPts.
+- **Entropia dell'esito e della scoreline** in bit per misurare equilibrio e incertezza del match.
+- **Proiezione a 38 gare** di punti, vittorie, pareggi, sconfitte, gol attesi e differenza reti.
+- **Profilo scouting** con indice offensivo, resistenza difensiva, Elo e forma recente normalizzati.
+- **Diagnostica Monte Carlo** che confronta probabilita teoriche Dixon-Coles e frequenze campionarie, evidenziando lo scarto massimo del campione.
+
+Le metriche sono calcolate in post-processing sugli stessi campioni gia
+generati dal motore e non correggono retroattivamente alcun mercato.

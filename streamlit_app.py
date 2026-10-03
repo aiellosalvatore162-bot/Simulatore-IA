@@ -9,7 +9,20 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import streamlit as st
 import database
-from engine import MatchConfig, TeamParams, calculate_team_strength, simulate_match
+from engine import (
+    MatchConfig,
+    TeamParams,
+    calculate_team_strength,
+    generate_bivariate_dixon_coles_probs,
+    simulate_match,
+)
+
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+except ModuleNotFoundError:
+    px = None
+    go = None
 
 
 st.set_page_config(
@@ -812,6 +825,201 @@ def render_prop_grid(result: Dict[str, Any], home_team: TeamParams, away_team: T
     st.markdown(f'<div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:.65rem">{cards}</div>', unsafe_allow_html=True)
 
 
+def score_probability_frame(result: Dict[str, Any], max_goals: int = 7) -> pd.DataFrame:
+    """Prepara la matrice scoreline dalla stessa distribuzione Dixon-Coles del motore."""
+    metadata = result.get("metadata", {})
+    lambda_value = _number(metadata.get("expected_goals_home_lambda"), 0.0)
+    mu_value = _number(metadata.get("expected_goals_away_mu"), 0.0)
+    if lambda_value <= 0.0 or mu_value <= 0.0:
+        return pd.DataFrame()
+    matrix = generate_bivariate_dixon_coles_probs(
+        lambda_value,
+        mu_value,
+        _number(metadata.get("dixon_coles_rho"), -0.11),
+        max_goals=max_goals,
+    )
+    return pd.DataFrame(
+        matrix * 100.0,
+        index=[str(goals) for goals in range(max_goals + 1)],
+        columns=[str(goals) for goals in range(max_goals + 1)],
+    )
+
+
+def value_bet_frame(result: Dict[str, Any]) -> pd.DataFrame:
+    """Rende confrontabili probabilita, quota equa, edge ed EV delle quote inserite."""
+    rows = []
+    for candidate in result.get("value_betting", {}).get("all_value_bets", []):
+        odds = _number(candidate.get("odds"), 0.0)
+        if odds <= 1.0:
+            continue
+        simulated_probability = _number(candidate.get("simulated_prob_pct"), 0.0)
+        rows.append({
+            "Mercato": candidate.get("market", "N/D"),
+            "Prob. modello %": simulated_probability,
+            "Prob. implicita %": _number(candidate.get("implied_prob_pct"), 0.0),
+            "Quota": odds,
+            "Quota equa": round(100.0 / max(simulated_probability, 0.01), 2),
+            "Edge %": _number(candidate.get("edge_pct"), 0.0),
+            "EV %": _number(candidate.get("ev_pct"), 0.0),
+            "Value": "Si" if candidate.get("is_value") else "No",
+        })
+    return pd.DataFrame(rows).sort_values("EV %", ascending=False) if rows else pd.DataFrame()
+
+
+def bankroll_plan(value_bet: Optional[Dict[str, Any]], bankroll: float, fraction: float) -> Dict[str, float]:
+    """Calcola sizing Kelly frazionale e rendimento atteso senza modificare il value bet."""
+    if not value_bet:
+        return {"stake": 0.0, "kelly": 0.0, "expected_return": 0.0, "max_loss": 0.0}
+    odds = _number(value_bet.get("odds"), 0.0)
+    probability = _number(value_bet.get("simulated_prob_pct"), 0.0) / 100.0
+    if odds <= 1.0 or probability <= 0.0:
+        return {"stake": 0.0, "kelly": 0.0, "expected_return": 0.0, "max_loss": 0.0}
+    net_odds = odds - 1.0
+    kelly = max(0.0, ((net_odds * probability) - (1.0 - probability)) / net_odds)
+    stake = max(0.0, float(bankroll)) * min(kelly * max(0.0, float(fraction)), 0.05)
+    expected_return = stake * (probability * net_odds - (1.0 - probability))
+    return {
+        "stake": round(stake, 2),
+        "kelly": round(kelly * 100.0, 2),
+        "expected_return": round(expected_return, 2),
+        "max_loss": round(stake, 2),
+    }
+
+
+def render_advanced_analysis(result: Dict[str, Any], home_team: TeamParams, away_team: TeamParams) -> None:
+    """Visualizzazioni e strumenti di rischio sopra il risultato immutato del motore."""
+    score_frame = score_probability_frame(result)
+    plotly_available = px is not None and go is not None
+    if not plotly_available:
+        st.warning("Plotly non è installato nell'ambiente attivo: visualizzo i dati in modalità tabellare. Esegui `pip install -r requirements.txt` per riattivare i grafici interattivi.")
+
+    advanced = result.get("advanced_analytics", {})
+    xpts = advanced.get("xpts", {})
+    projection = advanced.get("long_term_projection", {})
+    uncertainty = advanced.get("uncertainty", {})
+    scouting = advanced.get("scouting_profile", {})
+    diagnostics = advanced.get("monte_carlo_diagnostics", {})
+    if xpts and projection:
+        st.markdown("#### Indicatori di performance attesa")
+        metrics = st.columns(4)
+        metrics[0].metric(f"xPts {home_team.name}", f"{xpts.get('home', 0.0):.2f}")
+        metrics[1].metric(f"xPts {away_team.name}", f"{xpts.get('away', 0.0):.2f}")
+        metrics[2].metric("Entropia esito", f"{uncertainty.get('outcome_entropy_bits', 0.0):.2f} bit")
+        metrics[3].metric("Scarto campione", f"{diagnostics.get('max_probability_deviation_pct', 0.0):.2f}%")
+
+        projection_frame = pd.DataFrame([
+            {
+                "Squadra": projection.get("home", {}).get("team", home_team.name),
+                "Punti attesi / 38": projection.get("home", {}).get("points", 0.0),
+                "Intervallo 95%": " - ".join(f"{value:.1f}" for value in projection.get("home", {}).get("points_interval", [0.0, 0.0])),
+                "GF attesi": projection.get("home", {}).get("expected_goals_for", 0.0),
+                "DR atteso": projection.get("home", {}).get("expected_goal_difference", 0.0),
+            },
+            {
+                "Squadra": projection.get("away", {}).get("team", away_team.name),
+                "Punti attesi / 38": projection.get("away", {}).get("points", 0.0),
+                "Intervallo 95%": " - ".join(f"{value:.1f}" for value in projection.get("away", {}).get("points_interval", [0.0, 0.0])),
+                "GF attesi": projection.get("away", {}).get("expected_goals_for", 0.0),
+                "DR atteso": projection.get("away", {}).get("expected_goal_difference", 0.0),
+            },
+        ])
+        st.dataframe(projection_frame, width="stretch", hide_index=True)
+
+        scouting_frame = pd.DataFrame([
+            {
+                "Squadra": scouting.get("home", {}).get("team", home_team.name),
+                "Indice attacco": scouting.get("home", {}).get("attack_index", 0.0),
+                "Resistenza difensiva": scouting.get("home", {}).get("defensive_resistance", 0.0),
+                "Forma 0-100": scouting.get("home", {}).get("form_score", 0.0),
+                "Elo": scouting.get("home", {}).get("elo", 0.0),
+            },
+            {
+                "Squadra": scouting.get("away", {}).get("team", away_team.name),
+                "Indice attacco": scouting.get("away", {}).get("attack_index", 0.0),
+                "Resistenza difensiva": scouting.get("away", {}).get("defensive_resistance", 0.0),
+                "Forma 0-100": scouting.get("away", {}).get("form_score", 0.0),
+                "Elo": scouting.get("away", {}).get("elo", 0.0),
+            },
+        ])
+        st.caption("Profilo scouting: valori di attacco e resistenza difensiva superiori a 1 indicano un segnale sopra la base del match.")
+        st.dataframe(scouting_frame, width="stretch", hide_index=True)
+    else:
+        st.info("Metriche avanzate non presenti in questo risultato storico.")
+
+    left, right = st.columns([1.35, 1])
+    with left:
+        st.markdown("#### Mappa delle scoreline")
+        if score_frame.empty:
+            st.info("Matrice scoreline non disponibile per questo risultato storico.")
+        elif plotly_available:
+            figure = go.Figure(go.Heatmap(
+                z=score_frame.to_numpy(),
+                x=[f"{away_team.name} {label}" for label in score_frame.columns],
+                y=[f"{home_team.name} {label}" for label in score_frame.index],
+                colorscale="Tealgrn",
+                colorbar={"title": "%"},
+                hovertemplate="Casa %{y}<br>Ospite %{x}<br>Probabilità %{z:.2f}%<extra></extra>",
+            ))
+            figure.update_layout(height=480, margin={"l": 0, "r": 0, "t": 15, "b": 0}, xaxis_title="Gol ospite", yaxis_title="Gol casa")
+            st.plotly_chart(figure, width="stretch", config={"displaylogo": False})
+        else:
+            st.dataframe(score_frame.style.format("{:.2f}%"), width="stretch")
+    with right:
+        st.markdown("#### Gestione cassa")
+        bankroll = st.number_input("Cassa disponibile (€)", min_value=1.0, value=100.0, step=10.0, key="risk_bankroll")
+        fraction = st.slider("Frazione Kelly", min_value=0.0, max_value=1.0, value=0.25, step=0.05, key="risk_kelly_fraction")
+        best_value = result.get("value_betting", {}).get("best_value_bet")
+        plan = bankroll_plan(best_value, bankroll, fraction)
+        metrics = st.columns(2)
+        metrics[0].metric("Stake suggerito", f"€ {plan['stake']:.2f}")
+        metrics[1].metric("Kelly pieno", f"{plan['kelly']:.2f}%")
+        st.metric("Rendimento atteso", f"€ {plan['expected_return']:+.2f}")
+        st.caption("Sizing limitato al 5% della cassa per contenere la concentrazione su una singola selezione.")
+        if best_value:
+            st.dataframe(pd.DataFrame([{
+                "Selezione": best_value.get("market", "N/D"),
+                "Quota": best_value.get("odds", 0.0),
+                "Edge": f"{best_value.get('edge_pct', 0.0):+.2f}%",
+                "EV": f"{best_value.get('ev_pct', 0.0):+.2f}%",
+            }]), width="stretch", hide_index=True)
+        else:
+            st.info("Inserisci quote bookmaker per attivare il sizing e l'analisi di edge.")
+
+    odds_frame = value_bet_frame(result)
+    st.markdown("#### Probabilità modello vs mercato")
+    if odds_frame.empty:
+        st.info("Nessuna quota disponibile: il modello resta consultabile senza confronto di mercato.")
+    elif plotly_available:
+        chart_frame = odds_frame.melt(
+            id_vars=["Mercato"],
+            value_vars=["Prob. modello %", "Prob. implicita %"],
+            var_name="Fonte",
+            value_name="Probabilità %",
+        )
+        figure = px.bar(chart_frame, x="Mercato", y="Probabilità %", color="Fonte", barmode="group", text_auto=".1f")
+        figure.update_layout(height=420, margin={"l": 0, "r": 0, "t": 15, "b": 100}, legend_title_text="")
+        st.plotly_chart(figure, width="stretch", config={"displaylogo": False})
+        st.dataframe(odds_frame, width="stretch", hide_index=True)
+    else:
+        st.dataframe(odds_frame, width="stretch", hide_index=True)
+
+    st.markdown("#### Profilo di rischio della selezione")
+    candidates = result.get("value_betting", {}).get("all_value_bets", [])
+    positive_ev = [candidate for candidate in candidates if _number(candidate.get("ev_pct"), 0.0) > 0.0]
+    if positive_ev:
+        average_probability = sum(_number(item.get("simulated_prob_pct"), 0.0) for item in positive_ev) / len(positive_ev)
+        average_ev = sum(_number(item.get("ev_pct"), 0.0) for item in positive_ev) / len(positive_ev)
+        concentration = max(_number(item.get("simulated_prob_pct"), 0.0) for item in positive_ev)
+        st.dataframe(pd.DataFrame([{
+            "Selezioni positive": len(positive_ev),
+            "Probabilità media": f"{average_probability:.1f}%",
+            "EV medio": f"{average_ev:+.2f}%",
+            "Concentrazione massima": f"{concentration:.1f}%",
+        }]), width="stretch", hide_index=True)
+    else:
+        st.caption("Nessuna selezione a EV positivo nel set di quote inserito.")
+
+
 def show_results(result: Dict[str, Any], home_team: TeamParams, away_team: TeamParams, match: Optional[Dict[str, Any]]) -> None:
     metadata = result["metadata"]
     save_history_entry(result, home_team, away_team, match)
@@ -839,34 +1047,40 @@ def show_results(result: Dict[str, Any], home_team: TeamParams, away_team: TeamP
     else:
         st.info("Nessun value bet calcolato: inserisci una o più quote per attivare il filtro.")
 
-    st.subheader("Analisi mercati")
-    market_labels = {
-        "1x2_finale": "1X2 finale",
-        "1x2_primo_tempo": "1X2 primo tempo",
-        "over_under_finale": "Over / Under finale",
-        "over_under_primo_tempo": "Over / Under primo tempo",
-        "goal_nogoal_finale": "Goal / No Goal finale",
-        "goal_nogoal_primo_tempo": "Goal / No Goal primo tempo",
-        "cartellini": "Cartellini",
-        "calci_dangolo": "Calci d'angolo",
-        "falli": "Falli",
-        "multigol_partita": "Multigol partita",
-        "multigol_casa": "Multigol casa",
-        "multigol_ospite": "Multigol ospite",
-        "multigol_casa_combo_ospite": "Multigol casa + ospite",
-        "multigol_primo_tempo_combo_secondo_tempo": "Multigol tempi",
-        "over_under_squadra_casa": "Over / Under casa",
-        "over_under_squadra_ospite": "Over / Under ospite",
-    }
-    tabs = st.tabs(list(market_labels.values()))
-    for tab, category in zip(tabs, market_labels):
-        with tab:
-            st.dataframe(market_frame(result["markets"][category]), width="stretch", hide_index=True)
+    analysis_tab, markets_tab, narrative_tab = st.tabs(["Dashboard analitica", "Mercati", "Report modello"])
+    with analysis_tab:
+        render_advanced_analysis(result, home_team, away_team)
 
-    st.subheader("Commento Esperto IA")
-    st.info(result.get("ai_narrative") or natural_convergence_text(result, home_team, away_team))
-    st.subheader("Convergenza del modello")
-    st.write(natural_convergence_text(result, home_team, away_team))
+    with markets_tab:
+        st.subheader("Analisi mercati")
+        market_labels = {
+            "1x2_finale": "1X2 finale",
+            "1x2_primo_tempo": "1X2 primo tempo",
+            "over_under_finale": "Over / Under finale",
+            "over_under_primo_tempo": "Over / Under primo tempo",
+            "goal_nogoal_finale": "Goal / No Goal finale",
+            "goal_nogoal_primo_tempo": "Goal / No Goal primo tempo",
+            "cartellini": "Cartellini",
+            "calci_dangolo": "Calci d'angolo",
+            "falli": "Falli",
+            "multigol_partita": "Multigol partita",
+            "multigol_casa": "Multigol casa",
+            "multigol_ospite": "Multigol ospite",
+            "multigol_casa_combo_ospite": "Multigol casa + ospite",
+            "multigol_primo_tempo_combo_secondo_tempo": "Multigol tempi",
+            "over_under_squadra_casa": "Over / Under casa",
+            "over_under_squadra_ospite": "Over / Under ospite",
+        }
+        tabs = st.tabs(list(market_labels.values()))
+        for tab, category in zip(tabs, market_labels):
+            with tab:
+                st.dataframe(market_frame(result["markets"][category]), width="stretch", hide_index=True)
+
+    with narrative_tab:
+        st.subheader("Commento Esperto IA")
+        st.info(result.get("ai_narrative") or natural_convergence_text(result, home_team, away_team))
+        st.subheader("Convergenza del modello")
+        st.write(natural_convergence_text(result, home_team, away_team))
 
 
 def calculate_team_strength_from_result(result: Dict[str, Any], side: str) -> float:

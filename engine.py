@@ -11,6 +11,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from scipy.stats import poisson
+from analytics import analyze_simulation
 
 
 @dataclass
@@ -1300,12 +1301,24 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
 
     elapsed_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
 
+    advanced_analytics = analyze_simulation(
+        config=config,
+        lambda_=lambda_,
+        mu=mu,
+        joint_probs=generate_bivariate_dixon_coles_probs(
+            lambda_, mu, config.dixon_coles_rho, max_goals=max_goals
+        ),
+        home_ft=home_ft,
+        away_ft=away_ft,
+    )
+
     return {
         "metadata": {
             "home_team": config.home_team.name,
             "away_team": config.away_team.name,
             "expected_goals_home_lambda": round(lambda_, 3),
             "expected_goals_away_mu": round(mu, 3),
+            "dixon_coles_rho": round(config.dixon_coles_rho, 4),
             "bookmaker_calibration": bookmaker_calibration,
             "organic_expected_goals_home": round(calculate_expected_goals(MatchConfig(
                 home_team=TeamParams(
@@ -1370,4 +1383,5 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
         "market_odds": market_odds,
         "market_odds_normalized": normalized_market_odds,
         "ai_narrative": ai_narrative,
+        "advanced_analytics": advanced_analytics,
     }
