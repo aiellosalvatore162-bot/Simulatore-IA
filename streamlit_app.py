@@ -5,6 +5,7 @@ from dataclasses import asdict
 import json
 import re
 import sqlite3
+import sys
 import unicodedata
 from typing import Any, Dict, List, Optional
 
@@ -135,10 +136,17 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
     """Estrae campi squadra e avanzati da testo libero senza inventare valori."""
     parsed: Dict[str, Any] = {"bookmaker_odds": {}}
     section: Optional[str] = None
+
     def normalize_label(value: str) -> str:
         without_accents = unicodedata.normalize("NFKD", value)
         without_accents = "".join(char for char in without_accents if not unicodedata.combining(char))
-        return re.sub(r"\s+", " ", without_accents.lower().replace("_", " ").replace("/", " ")).strip()
+        return re.sub(r"[^a-z0-9]+", " ", without_accents.lower()).strip()
+
+    def report_parser_issue(line_number: int, raw_line: str, reason: str) -> None:
+        print(
+            f"[team-paste-parser] riga {line_number}: {reason}; testo={raw_line!r}",
+            file=sys.stderr,
+        )
 
     aliases = {
         "nome": "name", "squadra": "name", "nome casa": "home_name", "nome ospite": "away_name",
@@ -148,7 +156,7 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
         "fattore cartellino": "cards_factor", "gialli": "cards_factor", "ammonizioni": "cards_factor",
         "cards": "cards_factor", "fattore corner": "corners_factor", "fattore corners": "corners_factor",
         "corner": "corners_factor", "corners": "corners_factor", "calci dangolo": "corners_factor",
-        "calci dangolo": "corners_factor", "xg fatti": "xg_for",
+        "calci d angolo": "corners_factor", "xg fatti": "xg_for",
         "xg subiti": "xg_against", "xg fatti casa": "home_xg_for", "xg subiti casa": "home_xg_against",
         "xg fatti ospite": "away_xg_for", "xg subiti ospite": "away_xg_against",
         "momentum recente": "momentum", "impatto assenze": "absence", "assenze": "absence",
@@ -160,11 +168,11 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
         "home_xg_for", "home_xg_against", "away_xg_for", "away_xg_against", "momentum",
         "absence", "referee_yellow_avg", "referee_red_avg", "referee_fouls_avg",
     }
-    for raw_line in text.splitlines():
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.strip()
         if not line:
             continue
-        normalized_line = normalize_label(re.sub(r"[^a-zA-Z0-9À-ÿ]+", " ", line))
+        normalized_line = normalize_label(line)
         section_headers = {
             "casa": "home",
             "parametri casa": "home",
@@ -187,13 +195,21 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
             section = section_headers[normalized_line]
             continue
 
-        if ":" not in line:
+        # Il trattino e' un separatore solo quando e' isolato da spazi:
+        # evita di spezzare etichette composte come "Fattore-Corners".
+        separator = re.search(r"\s*[:=]\s*|\s+-\s+", line)
+        if not separator:
+            report_parser_issue(line_number, raw_line, "separatore chiave/valore non riconosciuto")
             continue
 
-        raw_key, raw_value = line.split(":", 1)
+        raw_key = line[:separator.start()].strip()
+        raw_value = line[separator.end():].strip()
+        if not raw_key or not raw_value:
+            report_parser_issue(line_number, raw_line, "chiave o valore vuoto")
+            continue
         raw_key = raw_key.strip()
         raw_value = raw_value.strip()
-        key = normalize_label(raw_key.replace("%", ""))
+        key = normalize_label(raw_key)
 
         for prefix, prefixed_section in (("casa ", "home"), ("home ", "home"), ("ospite ", "away"), ("away ", "away")):
             if key.startswith(prefix):
@@ -202,6 +218,7 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
                 break
 
         if section is None:
+            report_parser_issue(line_number, raw_line, "sezione Casa/Ospite/Arbitro non ancora impostata")
             continue
 
         if section == "odds":
@@ -211,12 +228,15 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
                     category = "1x2_finale" if key == "1x2 finale" else "1x2_primo_tempo"
                     for selection, quote in zip(("1", "X", "2"), values[:3]):
                         parsed["bookmaker_odds"][f"{category}:{selection}"] = float(quote.replace(",", "."))
+                else:
+                    report_parser_issue(line_number, raw_line, "quote 1X2 incomplete")
             else:
                 parsed["bookmaker_odds"].update(parse_bookmaker_odds(line))
             continue
 
         field = aliases.get(key)
         if field is None:
+            report_parser_issue(line_number, raw_line, f"etichetta non riconosciuta: {raw_key!r}")
             continue
         if field in {"home_name", "away_name"}:
             expected_section = "home" if field == "home_name" else "away"
@@ -233,6 +253,7 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
         if field in numeric_fields:
             number_match = re.search(r"-?\d+(?:\.\d+)?", value_text)
             if not number_match:
+                report_parser_issue(line_number, raw_line, "valore numerico non riconosciuto")
                 continue
             number = float(number_match.group())
             if field == "absence" and "%" in raw_value:
@@ -387,7 +408,8 @@ def load_competitions() -> List[Dict[str, Any]]:
 
 @st.cache_data(ttl=15, show_spinner=False)
 def load_matches(league_id: int) -> List[Dict[str, Any]]:
-    return database.get_matches(league_id=league_id, limit=500)
+    matches = database.get_matches(league_id=league_id, limit=500)
+    return matches if matches else []
 
 
 @st.cache_data(ttl=15, show_spinner=False)
@@ -1326,11 +1348,14 @@ def render_league_page(league: Dict[str, Any]) -> None:
 
     with fixtures_tab:
         matches = load_matches(league_id)
-        matchdays: List[str] = []
-        for match in matches:
-            matchday = str(match.get("matchday") or "N/D")
-            if matchday not in matchdays:
-                matchdays.append(matchday)
+        matchdays = sorted(
+            {
+                str(match.get("matchday")).strip()
+                for match in matches
+                if match.get("matchday") is not None and str(match.get("matchday")).strip()
+            },
+            key=lambda value: int(re.search(r"\d+", value).group()) if re.search(r"\d+", value) else 0,
+        )
         st.caption(f"{len(matchdays)} giornate presenti nei dati sincronizzati")
         if not matchdays:
             st.info("Nessuna giornata disponibile.")
