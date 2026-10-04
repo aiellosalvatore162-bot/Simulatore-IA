@@ -39,3 +39,25 @@ def test_parse_team_paste_logs_unmatched_lines(capsys):
     assert "etichetta non riconosciuta" in captured.err
     assert "chiave o valore vuoto" in captured.err
     assert len(error.value.issues) == 2
+
+
+def test_parse_team_paste_maps_advanced_and_referee_fields():
+    parsed = parse_team_paste(
+        """
+        CASA:
+        Momentum recente: 8,5
+        Impatto assenze chiave %: 35%
+        Motivazione / obiettivo: Lotta Scudetto e qualificazione Europa
+        PROFILO ARBITRALE:
+        Gialli arbitro: 6,2
+        Rossi medi: 0,35
+        Falli arbitro: 31
+        """
+    )
+
+    assert parsed["home_momentum"] == 8.5
+    assert parsed["home_absence_impact"] == 0.35
+    assert "Scudetto" in parsed["home_stakes"]
+    assert parsed["referee_yellow_avg"] == 6.2
+    assert parsed["referee_red_avg"] == 0.35
+    assert parsed["referee_fouls_avg"] == 31.0

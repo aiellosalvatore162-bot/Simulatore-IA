@@ -168,9 +168,16 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
         "calci d angolo": "corners_factor", "xg fatti": "xg_for",
         "xg subiti": "xg_against", "xg fatti casa": "home_xg_for", "xg subiti casa": "home_xg_against",
         "xg fatti ospite": "away_xg_for", "xg subiti ospite": "away_xg_against",
-        "momentum recente": "momentum", "impatto assenze": "absence", "assenze": "absence",
-        "motivazione": "stakes", "obiettivo": "stakes", "motivazione obiettivo": "stakes", "gialli medi": "referee_yellow_avg",
-        "rossi medi": "referee_red_avg", "falli medi": "referee_fouls_avg",
+        "momentum": "momentum", "momentum recente": "momentum",
+        "impatto assenze": "absence", "impatto assenze chiave": "absence",
+        "assenze": "absence", "assenze chiave": "absence",
+        "motivazione": "stakes", "obiettivo": "stakes", "motivazione obiettivo": "stakes",
+        "gialli medi": "referee_yellow_avg", "gialli arbitro": "referee_yellow_avg",
+        "media gialli": "referee_yellow_avg", "yellow cards": "referee_yellow_avg",
+        "rossi medi": "referee_red_avg", "rossi arbitro": "referee_red_avg",
+        "media rossi": "referee_red_avg", "red cards": "referee_red_avg",
+        "falli medi": "referee_fouls_avg", "falli arbitro": "referee_fouls_avg",
+        "media falli": "referee_fouls_avg", "fouls": "referee_fouls_avg",
     }
     numeric_fields = {
         "attack", "defense", "elo", "cards_factor", "corners_factor", "xg_for", "xg_against",
@@ -396,13 +403,33 @@ def apply_pasted_values(parsed: Dict[str, Any], widget_prefix: str) -> None:
             value = parsed[field]
             if field.endswith("absence_impact"):
                 value *= 100.0
+            limits = {
+                "momentum": (0.0, 10.0),
+                "absence": (0.0, 100.0),
+                "referee_yellow_avg": (0.0, 15.0),
+                "referee_red_avg": (0.0, 3.0),
+                "referee_fouls_avg": (5.0, 60.0),
+            }
+            field_name = field.removeprefix("home_").removeprefix("away_")
+            if field_name in limits:
+                low, high = limits[field_name]
+                value = max(low, min(high, float(value)))
             st.session_state[widget_key] = value
     for side in ("home", "away"):
         stakes = parsed.get(f"{side}_stakes")
         if stakes:
             options = ["Tranquilla a meta classifica", "Lotta Scudetto / Europa", "Salvezza disperata", "Derby / alta rivalita"]
-            normalized = stakes.lower()
-            selected = next((option for option in options if option.lower() in normalized or normalized in option.lower()), None)
+            normalized = unicodedata.normalize("NFKD", stakes).encode("ascii", "ignore").decode().lower()
+            if any(token in normalized for token in ("derby", "rival", "alta rival")):
+                selected = options[3]
+            elif any(token in normalized for token in ("salvez", "retrocession", "bottom")):
+                selected = options[2]
+            elif any(token in normalized for token in ("scudetto", "europa", "champion", "titolo")):
+                selected = options[1]
+            elif any(token in normalized for token in ("tranquilla", "meta classifica", "meta classifica")):
+                selected = options[0]
+            else:
+                selected = next((option for option in options if option.lower() in normalized or normalized in option.lower()), None)
             if selected:
                 st.session_state[f"{widget_prefix}_{side}_stakes"] = selected
     for state_key in list(st.session_state):

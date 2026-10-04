@@ -78,3 +78,22 @@ def test_sync_rejects_unknown_competition(monkeypatch, tmp_path):
         assert "UNKNOWN" in str(exc)
     else:
         raise AssertionError("La sincronizzazione deve rifiutare codici sconosciuti")
+
+
+def test_sync_falls_back_to_offline_seed_when_providers_fail(monkeypatch, tmp_path):
+    monkeypatch.delenv("FOOTBALL_DATA_API_KEY", raising=False)
+    monkeypatch.setattr(
+        data_sync,
+        "_sofascore_season",
+        lambda *args: (_ for _ in ()).throw(data_sync.FootballDataError("offline")),
+    )
+    result = data_sync.sync_current_season(
+        season=2026,
+        db_path=tmp_path / "offline.db",
+        competition_codes=["SA", "PL"],
+    )
+
+    assert result["season"] == 2026
+    assert all(item["source"] == "offline-seed" for item in result["synced"])
+    assert database.get_all_leagues(db_path=tmp_path / "offline.db")
+    assert database.get_matches(league_id=1, db_path=tmp_path / "offline.db")

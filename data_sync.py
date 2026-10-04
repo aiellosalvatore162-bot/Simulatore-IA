@@ -409,12 +409,30 @@ def sync_current_season(
                     errors.append({"code": code, "league": COMPETITIONS[code], "error": str(exc)})
                     if exc.status_code not in {403, 404}:
                         fatal_errors.append(exc)
-            if fatal_errors:
-                summary = "; ".join(str(error) for error in fatal_errors)
-                raise FootballDataError(f"Sincronizzazione annullata: {summary}")
             _recalculate_imported_team_stats(conn, selected_league_ids)
     finally:
         conn.close()
+
+    if not results:
+        # Le API possono essere indisponibili o restituire una stagione non
+        # ancora pubblicata. In tal caso ripristiniamo uno snapshot locale
+        # coerente invece di lasciare il DB vuoto dopo la pulizia iniziale.
+        from seed import seed_database
+
+        seed_database(db_path)
+        results = [
+            {
+                "code": code,
+                "league": COMPETITIONS[code],
+                "source": "offline-seed",
+                "season": selected_season,
+            }
+            for code in selected
+        ]
+        errors.append({
+            "source": "offline-seed",
+            "message": "API non disponibili: caricati dati locali 2026/2027.",
+        })
 
     return {"season": selected_season, "synced": results, "errors": errors}
 
