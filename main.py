@@ -9,6 +9,7 @@ Espone:
 
 from pathlib import Path
 import time
+import sqlite3
 from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException, Query, Path as FPath
 from fastapi.middleware.cors import CORSMiddleware
@@ -239,7 +240,7 @@ def complete_match_endpoint(
         return {"message": "Match completato e statistiche ricalcolate con successo", "details": res}
     except ValueError as ve:
         raise HTTPException(status_code=404, detail=str(ve))
-    except Exception as e:
+    except sqlite3.Error as e:
         raise HTTPException(status_code=500, detail=f"Errore durante l'aggiornamento: {str(e)}")
 
 
@@ -276,7 +277,7 @@ def save_history_endpoint(payload: SaveHistoryPayload):
             full_results_json=payload.full_results_json or "{}",
         )
         return {"message": "Simulazione salvata con successo nello storico", "id": h_id}
-    except Exception as e:
+    except (sqlite3.Error, TypeError, ValueError) as e:
         raise HTTPException(status_code=500, detail=f"Errore durante il salvataggio: {str(e)}")
 
 

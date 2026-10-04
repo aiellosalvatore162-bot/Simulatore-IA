@@ -4,6 +4,7 @@ from datetime import datetime
 from dataclasses import asdict
 import json
 import re
+import sqlite3
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -645,7 +646,7 @@ def save_history_entry(result: Dict[str, Any], home_team: TeamParams, away_team:
             assistant_narrative=natural_convergence_text(result, home_team, away_team),
             full_results_json=json.dumps(result),
         )
-    except Exception:
+    except (sqlite3.Error, TypeError, ValueError):
         history_id = None
     result["history_id"] = history_id
     entry = {
@@ -887,7 +888,7 @@ def bankroll_plan(value_bet: Optional[Dict[str, Any]], bankroll: float, fraction
 
 
 def render_advanced_analysis(result: Dict[str, Any], home_team: TeamParams, away_team: TeamParams) -> None:
-    """Visualizzazioni e strumenti di rischio sopra il risultato immutato del motore."""
+    """Visualizzazioni e strumenti di rischio sopra il risultato del motore."""
     score_frame = score_probability_frame(result)
     plotly_available = px is not None and go is not None
     if not plotly_available:

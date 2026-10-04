@@ -6,7 +6,6 @@ Esegue esattamente 50.000 simulazioni vettorializzate con NumPy.
 
 from dataclasses import dataclass
 import math
-import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
@@ -376,236 +375,6 @@ def analyze_market_convergence(
     }
 
 
-def simulate_match(config: MatchConfig) -> Dict[str, Any]:
-    """
-    Esegue la simulazione completa di 50.000 partite con NumPy vettorializzato.
-    Restituisce tutti i 15 mercati in percentuale e conteggio esatto,
-    più la convergenza e la spiegazione testuale.
-    """
-    start_time = time.perf_counter()
-
-    if config.seed is not None:
-        np.random.seed(config.seed)
-
-    n_sims = config.n_simulations
-    max_goals = 12
-
-    # 1. Calcolo tassi attesi di gol
-    lambda_, mu = calculate_expected_goals(config)
-
-    # 2. Matrice Dixon-Coles bivariata
-    joint_probs = generate_bivariate_dixon_coles_probs(
-        lambda_, mu, config.dixon_coles_rho, max_goals=max_goals
-    )
-    flat_probs = joint_probs.flatten()
-
-    # 3. Campionamento Monte Carlo vettorializzato su 50.000 match
-    grid_size = max_goals + 1
-    sampled_indices = np.random.choice(len(flat_probs), size=n_sims, p=flat_probs)
-    home_ft = (sampled_indices // grid_size).astype(np.int32)
-    away_ft = (sampled_indices % grid_size).astype(np.int32)
-    total_ft = home_ft + away_ft
-
-    # 4. Suddivisione 1° Tempo / 2° Tempo (Campionamento Binomiale condizionato, p_ht = 0.45)
-    # Garantisce per ogni simulazione: FT = HT + 2H
-    p_ht = 0.45
-    home_ht = np.random.binomial(home_ft, p_ht).astype(np.int32)
-    away_ht = np.random.binomial(away_ft, p_ht).astype(np.int32)
-    total_ht = home_ht + away_ht
-
-    home_2h = home_ft - home_ht
-    away_2h = away_ft - away_ht
-    total_2h = home_2h + away_2h
-
-    # 5. Simulazione Cartellini, Corner e Falli
-    # Cartellini: base 4.4, influenzati da bilanciamento Elo e propensioni
-    elo_gap = abs(config.home_team.elo - config.away_team.elo)
-    tension_factor = 1.0 + max(0.0, (100.0 - min(elo_gap, 100.0)) / 400.0) # più tesa se Elo simile
-    referee_yellow_factor = float(np.clip(config.referee_yellow_avg / 4.5, 0.5, 2.5))
-    referee_red_factor = 1.0 + float(np.clip(config.referee_red_avg, 0.0, 1.0)) * 0.20
-    intensity_factor = (config.home_stakes_multiplier + config.away_stakes_multiplier) / 2.0
-    exp_cards = 4.4 * ((config.home_team.cards_factor + config.away_team.cards_factor) / 2.0) * tension_factor * referee_yellow_factor * referee_red_factor * intensity_factor
-    exp_cards = max(1.0, min(22.0, exp_cards))
-    cards = np.random.poisson(lam=exp_cards, size=n_sims)
-
-    # Corner: fattori grezzi (es. 4.40) normalizzati rispetto a 4.50 corner per squadra.
-    corner_volume = float(np.clip(0.88 + 0.10 * ((lambda_ + mu) / 2.5), 0.82, 1.08))
-    corner_factor = (
-        _normalize_corner_factor(config.home_team.corners_factor)
-        + _normalize_corner_factor(config.away_team.corners_factor)
-    ) / 2.0
-    exp_corners = 9.5 * corner_factor * corner_volume * float(np.clip(intensity_factor, 0.85, 1.15))
-    exp_corners = float(np.clip(exp_corners, 6.5, 13.5))
-    corners = np.random.poisson(lam=exp_corners, size=n_sims)
-
-    # Falli: stima indipendente ma coerente con intensità e propensione ai cartellini.
-    exp_fouls = config.referee_fouls_avg * ((config.home_team.cards_factor + config.away_team.cards_factor) / 2.0) * tension_factor * intensity_factor
-    exp_fouls = max(12.0, min(45.0, exp_fouls))
-    fouls = np.random.poisson(lam=exp_fouls, size=n_sims)
-
-    # 6. CALCOLO DEI 15 MERCATI RICHIESTI
-
-    # 6.1 1X2 Finale
-    m_1x2_ft = {
-        "1": _calc_stat(home_ft > away_ft, n_sims),
-        "X": _calc_stat(home_ft == away_ft, n_sims),
-        "2": _calc_stat(away_ft > home_ft, n_sims),
-    }
-
-    # 6.2 1X2 Primo Tempo
-    m_1x2_ht = {
-        "1": _calc_stat(home_ht > away_ht, n_sims),
-        "X": _calc_stat(home_ht == away_ht, n_sims),
-        "2": _calc_stat(away_ht > home_ht, n_sims),
-    }
-
-    # 6.3 Over / Under Finale da 0.5 a 4.5
-    m_ou_ft = {}
-    for threshold in [0.5, 1.5, 2.5, 3.5, 4.5]:
-        m_ou_ft[f"Over_{threshold}"] = _calc_stat(total_ft > threshold, n_sims)
-        m_ou_ft[f"Under_{threshold}"] = _calc_stat(total_ft < threshold, n_sims)
-
-    # 6.4 Over / Under Primo Tempo da 0.5 a 4.5
-    m_ou_ht = {}
-    for threshold in [0.5, 1.5, 2.5, 3.5, 4.5]:
-        m_ou_ht[f"Over_{threshold}"] = _calc_stat(total_ht > threshold, n_sims)
-        m_ou_ht[f"Under_{threshold}"] = _calc_stat(total_ht < threshold, n_sims)
-
-    # 6.5 Goal / No Goal Finale
-    is_goal_ft = (home_ft > 0) & (away_ft > 0)
-    m_gg_ng_ft = {
-        "Goal": _calc_stat(is_goal_ft, n_sims),
-        "No_Goal": _calc_stat(~is_goal_ft, n_sims),
-    }
-
-    # 6.6 Goal / No Goal Primo Tempo
-    is_goal_ht = (home_ht > 0) & (away_ht > 0)
-    m_gg_ng_ht = {
-        "Goal": _calc_stat(is_goal_ht, n_sims),
-        "No_Goal": _calc_stat(~is_goal_ht, n_sims),
-    }
-
-    # 6.7 Cartellini (stima totale match / fasce)
-    m_cards = {
-        "expected_mean": round(float(np.mean(cards)), 2),
-        "Over_3.5": _calc_stat(cards > 3.5, n_sims),
-        "Under_3.5": _calc_stat(cards < 3.5, n_sims),
-        "Over_4.5": _calc_stat(cards > 4.5, n_sims),
-        "Under_4.5": _calc_stat(cards < 4.5, n_sims),
-        "Over_5.5": _calc_stat(cards > 5.5, n_sims),
-        "Under_5.5": _calc_stat(cards < 5.5, n_sims),
-        "fascia_0_3": _calc_stat(cards <= 3, n_sims),
-        "fascia_4_5": _calc_stat((cards >= 4) & (cards <= 5), n_sims),
-        "fascia_6_plus": _calc_stat(cards >= 6, n_sims),
-    }
-
-    # 6.8 Calci d'angolo (stima totale match / fasce)
-    m_corners = {
-        "expected_mean": round(float(np.mean(corners)), 2),
-        "Over_8.5": _calc_stat(corners > 8.5, n_sims),
-        "Under_8.5": _calc_stat(corners < 8.5, n_sims),
-        "Over_9.5": _calc_stat(corners > 9.5, n_sims),
-        "Under_9.5": _calc_stat(corners < 9.5, n_sims),
-        "Over_10.5": _calc_stat(corners > 10.5, n_sims),
-        "Under_10.5": _calc_stat(corners < 10.5, n_sims),
-        "Over_11.5": _calc_stat(corners > 11.5, n_sims),
-        "Under_11.5": _calc_stat(corners < 11.5, n_sims),
-        "fascia_0_8": _calc_stat(corners <= 8, n_sims),
-        "fascia_9_11": _calc_stat((corners >= 9) & (corners <= 11), n_sims),
-        "fascia_12_plus": _calc_stat(corners >= 12, n_sims),
-    }
-
-    # 6.9 Falli totali (stima dinamica per ogni simulazione)
-    m_fouls = {
-        "expected_mean": round(float(np.mean(fouls)), 2),
-        "Over_19.5": _calc_stat(fouls > 19.5, n_sims),
-        "Under_19.5": _calc_stat(fouls < 19.5, n_sims),
-        "Over_24.5": _calc_stat(fouls > 24.5, n_sims),
-        "Under_24.5": _calc_stat(fouls < 24.5, n_sims),
-        "Over_29.5": _calc_stat(fouls > 29.5, n_sims),
-        "Under_29.5": _calc_stat(fouls < 29.5, n_sims),
-    }
-
-    # Helper per calcolo multigol su un vettore di gol
-    def _compute_multigol_ranges(goals_arr: np.ndarray, ranges: List[Tuple[int, int]]) -> Dict[str, Any]:
-        res = {}
-        for low, high in ranges:
-            key = f"{low}_{high}"
-            mask = (goals_arr >= low) & (goals_arr <= high)
-            res[key] = _calc_stat(mask, n_sims)
-        return res
-
-    mg_ranges_match = [
-        (0, 1), (0, 2), (0, 3), (0, 4), (0, 5),
-        (1, 2), (1, 3), (1, 4), (1, 5),
-        (2, 3), (2, 4), (2, 5), (2, 6),
-        (3, 4), (3, 5), (3, 6)
-    ]
-    mg_ranges_team = [
-        (0, 1), (0, 2), (0, 3), (0, 4), (0, 5),
-        (1, 2), (1, 3), (1, 4), (1, 5),
-        (2, 3), (2, 4), (2, 5), (2, 6),
-        (3, 4), (3, 5), (3, 6)
-    ]
-
-    # 6.9 Multigol partita da 0-1 a 3-6
-    m_mg_match = _compute_multigol_ranges(total_ft, mg_ranges_match)
-
-    # 6.10 Multigol casa da 0-1 a 3-6
-    m_mg_home = _compute_multigol_ranges(home_ft, mg_ranges_team)
-
-    # 6.11 Multigol ospite da 0-1 a 3-6
-    m_mg_away = _compute_multigol_ranges(away_ft, mg_ranges_team)
-
-    # 6.12 Multigol Casa + Multigol Ospite (Combo principali)
-    combo_pairs = [
-        ((1, 2), (0, 1)),
-        ((1, 2), (1, 2)),
-        ((1, 3), (0, 1)),
-        ((1, 3), (1, 2)),
-        ((2, 3), (0, 1)),
-        ((2, 4), (1, 2)),
-        ((0, 1), (1, 2)),
-        ((0, 1), (1, 3)),
-        ((0, 1), (2, 3)),
-        ((2, 3), (1, 3)),
-    ]
-    m_mg_home_away_combo = {}
-    for (h_l, h_h), (a_l, a_h) in combo_pairs:
-        mask = (home_ft >= h_l) & (home_ft <= h_h) & (away_ft >= a_l) & (away_ft <= a_h)
-        key = f"Casa_{h_l}_{h_h}_e_Ospite_{a_l}_{a_h}"
-        m_mg_home_away_combo[key] = _calc_stat(mask, n_sims)
-
-    # 6.13 Multigol 1° Tempo + Multigol 2° Tempo (Combo principali)
-    half_pairs = [
-        ((0, 1), (0, 1)),
-        ((0, 1), (1, 2)),
-        ((0, 1), (1, 3)),
-        ((1, 2), (1, 2)),
-        ((1, 2), (1, 3)),
-        ((1, 2), (0, 1)),
-        ((1, 3), (1, 2)),
-        ((0, 0), (1, 2)),
-        ((1, 2), (2, 3)),
-    ]
-    m_mg_ht_2h_combo = {}
-    for (ht_l, ht_h), (sh_l, sh_h) in half_pairs:
-        mask = (total_ht >= ht_l) & (total_ht <= ht_h) & (total_2h >= sh_l) & (total_2h <= sh_h)
-        key = f"1T_{ht_l}_{ht_h}_e_2T_{sh_l}_{sh_h}"
-        m_mg_ht_2h_combo[key] = _calc_stat(mask, n_sims)
-
-    # 6.14 Over Squadra Casa da 0.5 a 3.5
-    m_over_home = {}
-    for t in [0.5, 1.5, 2.5, 3.5]:
-        m_over_home[f"Over_{t}"] = _calc_stat(home_ft > t, n_sims)
-        m_over_home[f"Under_{t}"] = _calc_stat(home_ft < t, n_sims)
-
-    # 6.15 Over Squadra Ospite da 0.5 a 3.5
-    m_over_away = {}
-    for t in [0.5, 1.5, 2.5, 3.5]:
-        m_over_away[f"Over_{t}"] = _calc_stat(away_ft > t, n_sims)
-        m_over_away[f"Under_{t}"] = _calc_stat(away_ft < t, n_sims)
-
 def normalize_market_odds(odds_dict: Optional[Dict[str, Optional[float]]] = None) -> Dict[str, Dict[str, Any]]:
     """Rimuove l'aggio normalizzando le probabilita inverse per ogni lavagna."""
     raw: Dict[str, Dict[str, float]] = {}
@@ -851,48 +620,6 @@ def calculate_value_bets(markets: Dict[str, Any], odds_dict: Optional[Dict[str, 
     }
 
 
-def validate_value_bets_against_score(
-    value_betting: Dict[str, Any], predicted_home: int, predicted_away: int
-) -> Dict[str, Any]:
-    """Rimuove consigli incompatibili con la scoreline modale della simulazione."""
-    total_goals = predicted_home + predicted_away
-
-    def compatible(candidate: Dict[str, Any]) -> bool:
-        category = str(candidate.get("category", "")).lower()
-        sign = str(candidate.get("sign", ""))
-        if category in {"1x2_finale", "1x2"}:
-            expected = "X" if predicted_home == predicted_away else ("1" if predicted_home > predicted_away else "2")
-            return sign == expected
-        if category in {"over_under_finale", "over/under"}:
-            match = re.search(r"(Over|Under)_(\d+(?:\.\d+)?)", sign, re.IGNORECASE)
-            if match:
-                threshold = float(match.group(2))
-                return total_goals > threshold if match.group(1).lower() == "over" else total_goals < threshold
-        if category == "goal_nogoal_finale":
-            return sign == ("Goal" if predicted_home > 0 and predicted_away > 0 else "No_Goal")
-        if category in {"over_under_squadra_casa", "over_under_squadra_ospite"}:
-            goals = predicted_home if "casa" in category else predicted_away
-            match = re.search(r"(Over|Under)_(\d+(?:\.\d+)?)", sign, re.IGNORECASE)
-            if match:
-                threshold = float(match.group(2))
-                return goals > threshold if match.group(1).lower() == "over" else goals < threshold
-        if category in {"multigol_partita", "multigol_casa", "multigol_ospite"}:
-            values = re.search(r"(\d+)_(\d+)", sign)
-            if values:
-                goals = total_goals if category == "multigol_partita" else (predicted_home if category == "multigol_casa" else predicted_away)
-                return int(values.group(1)) <= goals <= int(values.group(2))
-        return True
-
-    candidates = [candidate for candidate in value_betting.get("all_value_bets", []) if compatible(candidate)]
-    candidates.sort(key=lambda item: item.get("ev_pct", 0), reverse=True)
-    return {
-        **value_betting,
-        "best_value_bet": candidates[0] if candidates else None,
-        "all_value_bets": candidates,
-        "positive_ev_count": sum(candidate.get("ev_pct", 0) > 0 for candidate in candidates),
-    }
-
-
 def generate_ai_narrative(
     home_name: str,
     away_name: str,
@@ -1009,8 +736,7 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
     """
     start_time = time.perf_counter()
 
-    if config.seed is not None:
-        np.random.seed(config.seed)
+    rng = np.random.default_rng(config.seed)
 
     n_sims = config.n_simulations
     max_goals = 12
@@ -1019,9 +745,15 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
     lambda_, mu = calculate_expected_goals(config)
     lambda_, mu, bookmaker_calibration = calibrate_expected_goals(lambda_, mu, custom_odds)
 
-    # 2. Campionamento Monte Carlo stocastico direttamente dai lambda.
-    home_ft = np.random.poisson(lam=lambda_, size=n_sims).astype(np.int32)
-    away_ft = np.random.poisson(lam=mu, size=n_sims).astype(np.int32)
+    # 2. Campionamento Monte Carlo dalla stessa matrice Dixon-Coles usata
+    # dalla diagnostica e dalla matrice scoreline mostrata in dashboard.
+    joint_probs = generate_bivariate_dixon_coles_probs(
+        lambda_, mu, config.dixon_coles_rho, max_goals=max_goals
+    )
+    grid_size = max_goals + 1
+    sampled_indices = rng.choice(joint_probs.size, size=n_sims, p=joint_probs.ravel())
+    home_ft = (sampled_indices // grid_size).astype(np.int32)
+    away_ft = (sampled_indices % grid_size).astype(np.int32)
     total_ft = home_ft + away_ft
     trend_filter = {
         "high_intensity_filter": False,
@@ -1035,8 +767,8 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
     away_late_push = 0.02 * (config.away_momentum - 5.0) + 1.5 * (config.away_stakes_multiplier - 1.0)
     home_ht_probability = float(np.clip(0.45 - home_late_push, 0.35, 0.55))
     away_ht_probability = float(np.clip(0.45 - away_late_push, 0.35, 0.55))
-    home_ht = np.random.binomial(home_ft, home_ht_probability).astype(np.int32)
-    away_ht = np.random.binomial(away_ft, away_ht_probability).astype(np.int32)
+    home_ht = rng.binomial(home_ft, home_ht_probability).astype(np.int32)
+    away_ht = rng.binomial(away_ft, away_ht_probability).astype(np.int32)
     total_ht = home_ht + away_ht
 
     home_2h = home_ft - home_ht
@@ -1053,8 +785,8 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
     exp_cards = max(1.0, min(22.0, exp_cards))
     referee_dispersion = 1.0 + float(np.clip(config.referee_yellow_avg / 4.5 - 1.0, 0.0, 1.5)) * 0.35
     card_shape = max(0.5, exp_cards / max(referee_dispersion - 1.0, 0.01))
-    card_rates = np.random.gamma(card_shape, max(referee_dispersion - 1.0, 0.01), size=n_sims) if referee_dispersion > 1.01 else exp_cards
-    cards = np.random.poisson(lam=card_rates, size=n_sims)
+    card_rates = rng.gamma(card_shape, max(referee_dispersion - 1.0, 0.01), size=n_sims) if referee_dispersion > 1.01 else exp_cards
+    cards = rng.poisson(lam=card_rates, size=n_sims)
 
     corner_volume = float(np.clip(0.88 + 0.10 * ((lambda_ + mu) / 2.5), 0.82, 1.08))
     corner_factor = (
@@ -1063,15 +795,15 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
     ) / 2.0
     exp_corners = 9.5 * corner_factor * corner_volume * float(np.clip(intensity_factor, 0.85, 1.15))
     exp_corners = float(np.clip(exp_corners, 6.5, 13.5))
-    corners = np.random.poisson(lam=exp_corners, size=n_sims)
+    corners = rng.poisson(lam=exp_corners, size=n_sims)
 
     # Falli: stima dinamica coerente con intensità e propensione ai cartellini.
     exp_fouls = config.referee_fouls_avg * ((config.home_team.cards_factor + config.away_team.cards_factor) / 2.0) * tension_factor * intensity_factor
     exp_fouls = max(12.0, min(45.0, exp_fouls))
     foul_dispersion = 1.0 + float(np.clip(config.referee_fouls_avg / 24.0 - 1.0, 0.0, 1.5)) * 0.25
     foul_shape = max(0.5, exp_fouls / max(foul_dispersion - 1.0, 0.01))
-    foul_rates = np.random.gamma(foul_shape, max(foul_dispersion - 1.0, 0.01), size=n_sims) if foul_dispersion > 1.01 else exp_fouls
-    fouls = np.random.poisson(lam=foul_rates, size=n_sims)
+    foul_rates = rng.gamma(foul_shape, max(foul_dispersion - 1.0, 0.01), size=n_sims) if foul_dispersion > 1.01 else exp_fouls
+    fouls = rng.poisson(lam=foul_rates, size=n_sims)
 
     # 6. CALCOLO DEI 15 MERCATI RICHIESTI
     m_1x2_ft = {
@@ -1277,11 +1009,10 @@ def simulate_match(config: MatchConfig, custom_odds: Optional[Dict[str, Optional
     )[0]
     predicted_ft = _mode_pair(home_ft, away_ft, predicted_outcome)
 
-    # 8. Le quote sono solo un filtro opzionale per il Value Betting.
+    # 8. Le quote alimentano esclusivamente Edge, EV e selezione matematica.
     market_odds = custom_odds or {}
     normalized_market_odds = normalize_market_odds(market_odds)
     value_betting = calculate_value_bets(all_markets, market_odds)
-    value_betting = validate_value_bets_against_score(value_betting, *predicted_ft)
 
     # 9. Sintesi narrativa dell'assistente AI (2-3 righe)
     ai_narrative = generate_deep_narrative(

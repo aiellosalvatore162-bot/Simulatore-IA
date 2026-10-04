@@ -216,7 +216,7 @@ def fetch_market_odds(
                         odds["X"] = outcome.get("price")
                 if len(odds) >= 2:
                     return {"source": "The Odds API", "odds": odds}
-        except Exception:
+        except (OSError, ImportError, KeyError, TypeError, ValueError):
             pass
 
     if external_url:
@@ -228,7 +228,7 @@ def fetch_market_odds(
                 data = resp.json()
                 if "odds" in data:
                     return data
-        except Exception:
+        except (ImportError, KeyError, TypeError, ValueError):
             pass  # Fallback elegante
 
     return generate_calibrated_market_odds(
