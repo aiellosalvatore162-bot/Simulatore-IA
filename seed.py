@@ -26,6 +26,22 @@ from database import DB_FILE, init_db, get_db_connection
 from updater import recalculate_league_standings
 
 
+FULL_CALENDAR_TEAM_COUNTS = {
+    1: 20,  # Serie A
+    2: 20,  # Premier League
+    3: 18,  # Ligue 1
+    4: 20,  # La Liga
+    5: 18,  # Primeira Liga
+    6: 16,  # Belgian Pro League
+    7: 18,  # Bundesliga
+    8: 18,  # Eredivisie
+    9: 18,  # Süper Lig
+    10: 36,  # Champions League league phase
+    11: 36,  # Europa League league phase
+    12: 36,  # Conference League league phase
+}
+
+
 def seed_database(db_path: Optional[str | Path] = None) -> None:
     """Esegue il seeding completo delle 12 competizioni, squadre, calendari e marcatori."""
     target_path = db_path or DB_FILE
@@ -56,8 +72,9 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
             VALUES ('competitions', ?)""",
             ("|".join((
                 "Serie A", "Premier League", "Ligue 1", "La Liga",
-                "Campionato Portoghese", "Bundesliga", "Eredivisie",
-                "Champions League",
+                "Campionato Portoghese", "Campionato Belga", "Bundesliga",
+                "Eredivisie", "Süper Lig", "Champions League",
+                "Europa League", "Conference League",
             )),),
         )
         cur.execute(
@@ -240,6 +257,32 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
             (12, "FC Copenhagen ECL", "https://assets.football.db/teams/copenhagen.png", 1655.0, 1.10, 1.02, 1.15, "W-W-L-D-D", 1.55, 1.25, 2, 1.10, 1.05),
         ]
 
+        # I calendari completi richiedono l'organico ufficiale di ogni
+        # competizione. Le squadre non elencate sopra sono partecipanti
+        # deterministici di supporto, così il seed resta offline e ripetibile.
+        league_names = {row[0]: row[1] for row in leagues_data}
+        existing_counts = {league_id: 0 for league_id in FULL_CALENDAR_TEAM_COUNTS}
+        for team in teams_data:
+            existing_counts[team[0]] += 1
+        for league_id, target_count in FULL_CALENDAR_TEAM_COUNTS.items():
+            for index in range(existing_counts[league_id] + 1, target_count + 1):
+                league_name = league_names[league_id]
+                teams_data.append((
+                    league_id,
+                    f"{league_name} Club {index}",
+                    f"https://assets.football.db/teams/generated-{league_id}-{index}.png",
+                    1500.0,
+                    1.0,
+                    1.0,
+                    1.15,
+                    "D-D-D-D-D",
+                    1.35,
+                    1.20,
+                    0,
+                    1.0,
+                    1.0,
+                ))
+
         cur.executemany("""
             INSERT INTO teams (league_id, name, logo, elo, attack, defense, home_advantage, recent_form, xg_for, xg_against, matches_played_stats, cards_factor, corners_factor)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -368,13 +411,14 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
         }
         for league_id in sorted({row["league_id"] for row in all_teams} if all_teams else set()):
             league_teams = [row for row in all_teams if row["league_id"] == league_id]
-            if len(league_teams) < 2 or len(league_teams) > 24:
+            if len(league_teams) < 2 or len(league_teams) > 40:
                 continue
             rotation = [row["id"] for row in league_teams]
             if len(rotation) % 2:
                 rotation.append(None)
             half_rounds = len(rotation) - 1
             rounds = half_rounds * 2
+            round_interval_days = 3 if rounds > 38 else 7
             for round_index in range(rounds):
                 half = round_index >= rounds // 2
                 leg_round = round_index % half_rounds
@@ -392,7 +436,10 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
                         continue
                     prefix = "Giornata" if league_id in {1, 4} else "Matchday"
                     matchday = f"{prefix} {leg_round + 1 + (half_rounds if half else 0)}"
-                    match_date = (date(2026, 8, 15) + timedelta(days=7 * round_index)).isoformat()
+                    match_date = (
+                        date(2026, 8, 15)
+                        + timedelta(days=round_interval_days * round_index)
+                    ).isoformat()
                     cur.execute(
                         """INSERT INTO matches
                         (league_id, matchday, match_date, home_team_id, away_team_id, season, status)

@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import streamlit as st
 import database
-import data_sync
 from engine import (
     MatchConfig,
     TeamParams,
@@ -502,7 +501,7 @@ def load_matches(league_id: int) -> List[Dict[str, Any]]:
 
 
 def ensure_production_database() -> None:
-    """Crea uno snapshot iniziale solo se il DB attivo e' realmente vuoto."""
+    """Verifica e ripara lo snapshot locale della stagione corrente."""
     database.ensure_production_database()
 
 
@@ -1602,15 +1601,14 @@ def main() -> None:
         if st.button("Forza Sincronizzazione Database 2026/2027", key="force_sync_2026"):
             with st.spinner("Sincronizzazione stagione 2026/2027 in corso..."):
                 try:
-                    sync_result = data_sync.sync_current_season(season=2026)
-                except (data_sync.FootballDataError, sqlite3.Error, OSError, ValueError) as exc:
+                    database.ensure_production_database(force=True)
+                except (sqlite3.Error, OSError, ValueError) as exc:
                     st.error(f"Sincronizzazione fallita: {exc}")
                 else:
                     load_competitions.clear()
                     load_matches.clear()
                     st.success(
-                        f"Sincronizzazione completata: {len(sync_result['synced'])} competizioni, "
-                        f"{len(sync_result['errors'])} errori."
+                        "Database rigenerato con il seed locale completo della stagione 2026/2027."
                     )
 
     simulations = 100_000

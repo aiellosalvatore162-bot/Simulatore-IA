@@ -15,9 +15,13 @@ MANAGED_COMPETITIONS = (
     "Ligue 1",
     "La Liga",
     "Campionato Portoghese",
+    "Campionato Belga",
     "Bundesliga",
     "Eredivisie",
+    "Süper Lig",
     "Champions League",
+    "Europa League",
+    "Conference League",
 )
 
 
@@ -159,9 +163,29 @@ def init_db(db_path: Optional[str | Path] = None) -> None:
     conn.close()
 
 
-def ensure_production_database(db_path: Optional[str | Path] = None) -> bool:
-    """Ricrea e popola automaticamente un DB vuoto o SQLite corrotto."""
+def ensure_production_database(
+    db_path: Optional[str | Path] = None,
+    force: bool = False,
+) -> bool:
+    """Verifica e, se necessario, ricrea il database locale 2026/2027.
+
+    Quando ``force`` e' attivo il database viene rigenerato anche se la
+    verifica lo considera integro.
+    """
     target_path = Path(db_path or DB_FILE)
+    if force:
+        try:
+            if target_path.exists():
+                target_path.unlink()
+        except OSError:
+            # Lascia che il percorso standard di inizializzazione esponga
+            # l'errore al chiamante invece di continuare con dati vecchi.
+            raise
+        init_db(target_path)
+        from seed import seed_database
+        seed_database(target_path)
+        return True
+
     has_leagues = False
     has_scheduled_serie_a = False
     incomplete_managed_calendars = True
