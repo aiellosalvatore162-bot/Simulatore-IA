@@ -21,6 +21,8 @@ from engine import (
     simulate_match,
 )
 
+CURRENT_SEASON = getattr(database, "CURRENT_SEASON", "2026/2027")
+
 try:
     import plotly.express as px
     import plotly.graph_objects as go
@@ -1597,7 +1599,7 @@ def main() -> None:
     )
     render_main_navigation()
     with st.expander("Servizio database", expanded=False):
-        season = database.CURRENT_SEASON
+        season = CURRENT_SEASON
         st.caption(f"Sincronizzazione esplicita della stagione {season}.")
         if st.button(f"Forza sincronizzazione database {season}", key="force_sync"):
             with st.spinner(f"Sincronizzazione stagione {season} in corso..."):
