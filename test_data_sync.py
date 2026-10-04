@@ -74,3 +74,36 @@ def test_local_snapshot_covers_all_managed_competitions(tmp_path):
     assert set(expected).issubset(leagues)
     for name, expected_matches in expected.items():
         assert len(database.get_matches(leagues[name], db_path=tmp_path / "all.db", limit=1000)) == expected_matches
+
+
+def test_startup_rebuilds_non_current_database(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    data_sync.sync_current_season(db_path=db_path)
+    conn = database.get_db_connection(db_path)
+    conn.execute(
+        "UPDATE app_metadata SET value = '2025/2026' WHERE key = 'season'"
+    )
+    conn.execute(
+        "UPDATE matches SET matchday = 'Legacy giornata' WHERE league_id = 1 LIMIT 1"
+    )
+    conn.execute(
+        "UPDATE matches SET match_date = '2025-09-01' WHERE league_id = 2 LIMIT 1"
+    )
+    conn.commit()
+    conn.close()
+
+    assert database.ensure_production_database(db_path) is True
+
+    conn = database.get_db_connection(db_path)
+    season = conn.execute(
+        "SELECT value FROM app_metadata WHERE key = 'season'"
+    ).fetchone()["value"]
+    conn.close()
+    assert season == "2026/2027"
+    assert not database.get_matches(
+        league_id=1, db_path=db_path, limit=1000
+    )[0]["matchday"].startswith("Legacy")
+    assert all(
+        match["match_date"] >= "2026-07-01"
+        for match in database.get_matches(league_id=2, db_path=db_path, limit=1000)
+    )

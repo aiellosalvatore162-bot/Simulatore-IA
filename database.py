@@ -155,6 +155,7 @@ def ensure_production_database(db_path: Optional[str | Path] = None) -> bool:
     has_leagues = False
     has_scheduled_serie_a = False
     incomplete_managed_calendars = True
+    invalid_managed_dates = True
     current_season = False
     current_competitions = False
     has_all_managed_leagues = False
@@ -202,6 +203,20 @@ def ensure_production_database(db_path: Optional[str | Path] = None) -> bool:
                 """,
                 MANAGED_COMPETITIONS,
             ).fetchone() is not None
+            invalid_managed_dates = conn.execute(
+                f"""
+                SELECT 1
+                FROM matches AS m
+                JOIN leagues AS l ON l.id = m.league_id
+                WHERE l.name IN ({placeholders})
+                  AND (
+                    m.match_date < '2026-07-01'
+                    OR m.match_date > '2027-08-31'
+                  )
+                LIMIT 1
+                """,
+                MANAGED_COMPETITIONS,
+            ).fetchone() is not None
             has_all_managed_leagues = conn.execute(
                 f"SELECT COUNT(*) AS count FROM leagues WHERE name IN ({placeholders})",
                 MANAGED_COMPETITIONS,
@@ -221,6 +236,7 @@ def ensure_production_database(db_path: Optional[str | Path] = None) -> bool:
         and has_scheduled_serie_a
         and has_all_managed_leagues
         and not incomplete_managed_calendars
+        and not invalid_managed_dates
         and current_season
         and current_competitions
     ):
