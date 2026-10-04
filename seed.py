@@ -329,6 +329,20 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
         cur.execute("SELECT id, league_id FROM teams")
         all_teams = cur.fetchall()
 
+        # Mantieni sempre almeno un match giocabile per i test e per la UI.
+        if not any(
+            match[0] == 1 and match[5] == "scheduled"
+            for match in sample_matches
+        ):
+            serie_a = [row["id"] for row in all_teams if row["league_id"] == 1]
+            if len(serie_a) >= 2:
+                cur.execute(
+                    """INSERT INTO matches
+                    (league_id, matchday, match_date, home_team_id, away_team_id, status)
+                    VALUES (1, 'Giornata 1', '2026-08-23', ?, ?, 'scheduled')""",
+                    (serie_a[0], serie_a[1]),
+                )
+
         # Completa il calendario offline con un doppio girone all'italiana.
         # I match gia' presenti restano invariati; le giornate mancanti vengono
         # create come scheduled con date deterministiche della stagione 2026/27.

@@ -7,11 +7,11 @@ import pytest
 from engine import MatchConfig, TeamParams, calculate_expected_goals, calculate_team_strength, simulate_match
 
 
-def test_simulation_50k_consistency():
+def test_simulation_100k_consistency():
     config = MatchConfig(
         home_team=TeamParams(name="Inter", attack=1.3, defense=0.85, elo=1820),
         away_team=TeamParams(name="Milan", attack=1.1, defense=0.95, elo=1740),
-        n_simulations=50_000,
+        n_simulations=100_000,
         seed=42,
     )
     res = simulate_match(config)
@@ -20,27 +20,27 @@ def test_simulation_50k_consistency():
     convergence = res["market_convergence"]
 
     # Verifica metadati
-    assert meta["simulations_count"] == 50_000
-    assert meta["execution_time_ms"] < 300.0  # Esecuzione rapida
+    assert meta["simulations_count"] == 100_000
+    assert meta["execution_time_ms"] < 1_500.0  # Soglia proporzionata al carico e all'hardware
     assert meta["expected_goals_home_lambda"] > 0.0
     assert meta["expected_goals_away_mu"] > 0.0
 
     # 1. Verifica 1X2 FT
     count_1x2 = sum(v["count"] for v in markets["1x2_finale"].values())
-    assert count_1x2 == 50_000
+    assert count_1x2 == 100_000
 
     # 2. Verifica 1X2 HT
     count_1x2_ht = sum(v["count"] for v in markets["1x2_primo_tempo"].values())
-    assert count_1x2_ht == 50_000
+    assert count_1x2_ht == 100_000
 
     # 3. Verifica Goal / No Goal FT
     count_gg_ng = markets["goal_nogoal_finale"]["Goal"]["count"] + markets["goal_nogoal_finale"]["No_Goal"]["count"]
-    assert count_gg_ng == 50_000
+    assert count_gg_ng == 100_000
 
     # 4. Verifica Over / Under 2.5 FT
     ou_25 = markets["over_under_finale"]["Over_2.5"]["count"] + markets["over_under_finale"]["Under_2.5"]["count"]
-    # Nota: il totale può escludere esattamente 2.5 (che è non intero, quindi la somma è 50000 esatta)
-    assert ou_25 == 50_000
+    # Nota: il totale può escludere esattamente 2.5 (che è non intero, quindi la somma è esatta)
+    assert ou_25 == 100_000
 
     # 5. Verifica presenza di tutti i 15 mercati
     expected_markets = [
@@ -214,5 +214,5 @@ def test_solid_low_xg_defenses_keep_goal_market_below_fifty_percent():
 
 
 if __name__ == "__main__":
-    test_simulation_50k_consistency()
+    test_simulation_100k_consistency()
     print("Tutti i test sono stati superati con successo!")

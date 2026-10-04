@@ -137,6 +137,9 @@ def init_db(db_path: Optional[str | Path] = None) -> None:
 def ensure_production_database(db_path: Optional[str | Path] = None) -> bool:
     """Ricrea e popola automaticamente un DB vuoto o SQLite corrotto."""
     target_path = Path(db_path or DB_FILE)
+    has_leagues = False
+    has_scheduled_serie_a = False
+    incomplete_domestic_calendar = True
     try:
         init_db(target_path)
         conn = get_db_connection(target_path)
@@ -149,6 +152,25 @@ def ensure_production_database(db_path: Optional[str | Path] = None) -> bool:
             }
             required = {"leagues", "teams", "matches", "standings", "top_scorers"}
             has_leagues = conn.execute("SELECT 1 FROM leagues LIMIT 1").fetchone() is not None
+            has_scheduled_serie_a = (
+                conn.execute(
+                    "SELECT 1 FROM matches WHERE league_id = 1 AND status = 'scheduled' LIMIT 1"
+                ).fetchone()
+                is not None
+            )
+            incomplete_domestic_calendar = conn.execute(
+                """
+                SELECT 1
+                FROM leagues AS l
+                LEFT JOIN teams AS t ON t.league_id = l.id
+                LEFT JOIN matches AS m ON m.league_id = l.id
+                WHERE l.type = 'domestic'
+                GROUP BY l.id
+                HAVING COUNT(DISTINCT t.id) < 2
+                    OR COUNT(DISTINCT m.id) < COUNT(DISTINCT t.id) * (COUNT(DISTINCT t.id) - 1)
+                LIMIT 1
+                """
+            ).fetchone() is not None
             if not required.issubset(tables):
                 raise sqlite3.DatabaseError("schema SQLite incompleto")
         finally:
@@ -159,8 +181,7 @@ def ensure_production_database(db_path: Optional[str | Path] = None) -> bool:
         if target_path.exists():
             target_path.unlink()
         init_db(target_path)
-        has_leagues = False
-    if has_leagues:
+    if has_leagues and has_scheduled_serie_a and not incomplete_domestic_calendar:
         return False
     from seed import seed_database
     seed_database(target_path)

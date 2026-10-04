@@ -22,6 +22,10 @@ import data_sync
 from engine import MatchConfig, TeamParams, simulate_match
 import updater
 
+# Ripristina automaticamente un calendario minimo utilizzabile anche quando
+# il database esistente contiene leghe ma nessuna partita programmata.
+database.ensure_production_database()
+
 app = FastAPI(
     title="Football Predictor API 2026/2027 - Monte Carlo Dixon-Coles",
     description="Motore di simulazione calcistica vettorializzato su 50.000 iterazioni con SQLite, 12 competizioni, classifica automatica ed Elo dinamico.",

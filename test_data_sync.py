@@ -96,4 +96,12 @@ def test_sync_falls_back_to_offline_seed_when_providers_fail(monkeypatch, tmp_pa
     assert result["season"] == 2026
     assert all(item["source"] == "offline-seed" for item in result["synced"])
     assert database.get_all_leagues(db_path=tmp_path / "offline.db")
-    assert database.get_matches(league_id=1, db_path=tmp_path / "offline.db")
+    serie_a_matches = database.get_matches(
+        league_id=1, db_path=tmp_path / "offline.db", limit=1000
+    )
+    premier_matches = database.get_matches(
+        league_id=2, db_path=tmp_path / "offline.db", limit=1000
+    )
+    assert len(serie_a_matches) == 380
+    assert len(premier_matches) == 380
+    assert len({match["matchday"] for match in serie_a_matches}) == 38
