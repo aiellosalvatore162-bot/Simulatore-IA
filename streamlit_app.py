@@ -5,6 +5,7 @@ from dataclasses import asdict
 import json
 import re
 import sqlite3
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -134,12 +135,20 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
     """Estrae campi squadra e avanzati da testo libero senza inventare valori."""
     parsed: Dict[str, Any] = {"bookmaker_odds": {}}
     section: Optional[str] = None
+    def normalize_label(value: str) -> str:
+        without_accents = unicodedata.normalize("NFKD", value)
+        without_accents = "".join(char for char in without_accents if not unicodedata.combining(char))
+        return re.sub(r"\s+", " ", without_accents.lower().replace("_", " ").replace("/", " ")).strip()
+
     aliases = {
         "nome": "name", "squadra": "name", "nome casa": "home_name", "nome ospite": "away_name",
         "casa": "home_name", "home": "home_name", "ospite": "away_name", "away": "away_name",
         "attacco": "attack", "difesa": "defense", "elo": "elo", "forma": "recent_form",
         "forma recente": "recent_form", "fattore cartellini": "cards_factor", "cartellini": "cards_factor",
-        "fattore corner": "corners_factor", "corner": "corners_factor", "xg fatti": "xg_for",
+        "fattore cartellino": "cards_factor", "gialli": "cards_factor", "ammonizioni": "cards_factor",
+        "cards": "cards_factor", "fattore corner": "corners_factor", "fattore corners": "corners_factor",
+        "corner": "corners_factor", "corners": "corners_factor", "calci dangolo": "corners_factor",
+        "calci dangolo": "corners_factor", "xg fatti": "xg_for",
         "xg subiti": "xg_against", "xg fatti casa": "home_xg_for", "xg subiti casa": "home_xg_against",
         "xg fatti ospite": "away_xg_for", "xg subiti ospite": "away_xg_against",
         "momentum recente": "momentum", "impatto assenze": "absence", "assenze": "absence",
@@ -155,7 +164,7 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
         line = raw_line.strip()
         if not line:
             continue
-        normalized_line = re.sub(r"[^a-z0-9]+", " ", line.lower()).strip()
+        normalized_line = normalize_label(re.sub(r"[^a-zA-Z0-9À-ÿ]+", " ", line))
         section_headers = {
             "casa": "home",
             "parametri casa": "home",
@@ -171,6 +180,8 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
             "quote bookmaker": "odds",
             "odds": "odds",
             "bookmaker": "odds",
+            "dati casa": "home",
+            "dati ospite": "away",
         }
         if normalized_line in section_headers:
             section = section_headers[normalized_line]
@@ -182,9 +193,9 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
         raw_key, raw_value = line.split(":", 1)
         raw_key = raw_key.strip()
         raw_value = raw_value.strip()
-        key = re.sub(r"\s+", " ", raw_key.lower().replace("_", " ").replace("/", " ").replace("%", "").strip())
+        key = normalize_label(raw_key.replace("%", ""))
 
-        for prefix, prefixed_section in (("casa ", "home"), ("ospite ", "away")):
+        for prefix, prefixed_section in (("casa ", "home"), ("home ", "home"), ("ospite ", "away"), ("away ", "away")):
             if key.startswith(prefix):
                 section = prefixed_section
                 key = key[len(prefix):].strip()
@@ -1108,35 +1119,17 @@ def input_snapshot(home_team: TeamParams, away_team: TeamParams, match: Optional
 
 
 def render_welcome(competitions: List[Dict[str, Any]]) -> None:
-    """Home compatta: rende visibili le competizioni disponibili prima dell'analisi."""
+    """Home compatta con istruzioni per iniziare l'analisi."""
     st.markdown(
         "<div class='welcome-card'><h2>Benvenuto in Simulatore IA</h2>"
         "<p>Scegli una partita dai dati sincronizzati oppure crea un confronto personalizzato. "
         "Le quote sono facoltative: la simulazione matematica parte sempre.</p></div>",
         unsafe_allow_html=True,
     )
-    st.subheader("Campionati disponibili")
     if not competitions:
         st.info("Nessun campionato sincronizzato. Puoi comunque creare una partita personalizzata.")
         return
-    columns = st.columns(2)
-    for index, league in enumerate(competitions):
-        with columns[index % 2]:
-            with st.expander(f"{league.get('name', 'Campionato')} · {league.get('country', 'N/D')}"):
-                matches = load_matches(int(league["id"]))
-                st.write(f"{len(matches)} partite disponibili")
-                if matches:
-                    preview = pd.DataFrame([
-                        {
-                            "Data": match.get("match_date", "N/D"),
-                            "Partita": f"{match.get('home_team_name', 'Casa')} - {match.get('away_team_name', 'Ospite')}",
-                            "Stato": match.get("status", "N/D"),
-                        }
-                        for match in matches[:5]
-                    ])
-                    st.dataframe(preview, width="stretch", hide_index=True)
-
-    st.caption("Per partire subito, seleziona 'Nuova partita personalizzata' nel percorso di analisi qui sotto.")
+    st.caption("Per partire, scegli un campionato dalla scheda sottostante oppure crea una partita personalizzata.")
 
 
 def render_daily_coupon() -> None:

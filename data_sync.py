@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 from urllib.error import HTTPError, URLError
@@ -16,7 +15,9 @@ from database import DB_FILE, get_db_connection, init_db
 
 FOOTBALL_DATA_BASE_URL = "https://api.football-data.org/v4"
 SOFASCORE_BASE_URL = "https://www.sofascore.com/api/v1"
-DEFAULT_SEASON = date.today().year
+# Il prodotto e' dedicato alla stagione 2026/2027; l'ambiente puo' comunque
+# sovrascriverla con FOOTBALL_DATA_SEASON o con il parametro season.
+DEFAULT_SEASON = 2026
 
 # Codici ufficiali football-data.org. Le competizioni non disponibili per il
 # piano/API in uso vengono riportate come errore, senza dati inventati.

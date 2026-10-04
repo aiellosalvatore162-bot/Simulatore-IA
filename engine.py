@@ -376,7 +376,7 @@ def analyze_market_convergence(
 
 
 def normalize_market_odds(odds_dict: Optional[Dict[str, Optional[float]]] = None) -> Dict[str, Dict[str, Any]]:
-    """Rimuove l'aggio normalizzando le probabilita inverse per ogni lavagna."""
+    """Normalizza le probabilita inverse solo per lavagne complete."""
     raw: Dict[str, Dict[str, float]] = {}
     aliases = {"1": "1x2_finale", "X": "1x2_finale", "2": "1x2_finale"}
     for key, value in (odds_dict or {}).items():
@@ -392,16 +392,36 @@ def normalize_market_odds(odds_dict: Optional[Dict[str, Optional[float]]] = None
             category, selection = aliases.get(key, "over_under_finale"), key
         raw.setdefault(category, {})[selection] = odds
     normalized: Dict[str, Dict[str, Any]] = {}
+    complete_markets = {
+        "1x2_finale": {"1", "X", "2"},
+        "1x2_primo_tempo": {"1", "X", "2"},
+        "goal_nogoal_finale": {"Goal", "No_Goal"},
+        "goal_nogoal_primo_tempo": {"Goal", "No_Goal"},
+    }
     for category, selections in raw.items():
         inverse = {selection: 1.0 / odds for selection, odds in selections.items()}
         total = sum(inverse.values())
         if total <= 0.0:
             continue
+        # Over/Under e mercati squadra sono lavagne binarie: se manca il
+        # complemento non e' possibile rimuovere l'aggio senza trasformare
+        # la singola quota in una probabilita' fittizia del 100%.
+        known_outcomes = complete_markets.get(category)
+        is_complete = known_outcomes is not None and known_outcomes.issubset(selections)
+        if category.startswith("over_under_"):
+            is_complete = len(selections) >= 2 and any(
+                selection.startswith("Over_") for selection in selections
+            ) and any(selection.startswith("Under_") for selection in selections)
+        probabilities = {
+            selection: probability / total if is_complete else probability
+            for selection, probability in inverse.items()
+        }
         normalized[category] = {
             "overround": total,
-            "margin_pct": round((total - 1.0) * 100.0, 3),
-            "probabilities": {selection: probability / total for selection, probability in inverse.items()},
+            "margin_pct": round((total - 1.0) * 100.0, 3) if is_complete else None,
+            "probabilities": probabilities,
             "odds": selections,
+            "normalized": is_complete,
         }
     return normalized
 

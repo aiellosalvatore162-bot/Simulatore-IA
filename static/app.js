@@ -151,10 +151,10 @@ async function refreshCurrentLeague() {
     state.matchdays = buildExpectedMatchdays(league, state.teams, state.matches, matchdayPrefix);
 
     // Seleziona la prima giornata o la giornata corrente
-    if (!state.selectedMatchday || !days.includes(state.selectedMatchday)) {
+    if (!state.selectedMatchday || !state.matchdays.includes(state.selectedMatchday)) {
       // Preferisci una giornata che ha match 'scheduled' se esiste
       const scheduledMatch = state.matches.find(m => m.status === 'scheduled');
-      state.selectedMatchday = scheduledMatch ? scheduledMatch.matchday : (days[0] || 'Giornata 1');
+      state.selectedMatchday = scheduledMatch ? scheduledMatch.matchday : (state.matchdays[0] || 'Giornata 1');
     }
 
     renderMatchdaysSlider();
@@ -606,7 +606,6 @@ async function runPreparedAnalysis(matchId, homeTeamId, awayTeamId) {
       <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-[#00f0ff] mx-auto mb-3"></div>
       <span class="text-xs text-slate-400">Elaborazione 50.000 partite con modello Dixon-Coles...</span>
     </div>`;
-  `;
 
   try {
     const res = await fetch('/api/simulate', {
@@ -1139,4 +1138,3 @@ async function deleteHistoryItem(historyId, ev) {
     alert("Errore nell'eliminazione: " + err.message);
   }
 }
-
