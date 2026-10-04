@@ -384,8 +384,9 @@ def parse_bookmaker_odds(text: str) -> Dict[str, float]:
     return odds
 
 
-def apply_pasted_values(parsed: Dict[str, Any], widget_prefix: str) -> None:
+def apply_pasted_values(parsed: Dict[str, Any], widget_prefix: str) -> List[str]:
     """Aggiorna soltanto le chiavi riconosciute; gli altri input restano intatti."""
+    mapped_advanced: List[str] = []
     team_fields = ("name", "attack", "defense", "elo", "cards_factor", "corners_factor", "xg_for", "xg_against", "recent_form")
     for side in ("home", "away"):
         for field in team_fields:
@@ -415,6 +416,7 @@ def apply_pasted_values(parsed: Dict[str, Any], widget_prefix: str) -> None:
                 low, high = limits[field_name]
                 value = max(low, min(high, float(value)))
             st.session_state[widget_key] = value
+            mapped_advanced.append(field)
     for side in ("home", "away"):
         stakes = parsed.get(f"{side}_stakes")
         if stakes:
@@ -432,11 +434,13 @@ def apply_pasted_values(parsed: Dict[str, Any], widget_prefix: str) -> None:
                 selected = next((option for option in options if option.lower() in normalized or normalized in option.lower()), None)
             if selected:
                 st.session_state[f"{widget_prefix}_{side}_stakes"] = selected
+                mapped_advanced.append(f"{side}_stakes")
     for state_key in list(st.session_state):
         if state_key.startswith("odds_"):
             st.session_state[state_key] = None
     for quote_key, quote in parsed.get("bookmaker_odds", {}).items():
         st.session_state[f"odds_{quote_key.replace(':', '_')}"] = quote
+    return mapped_advanced
 
 
 def clear_pasted_values(widget_prefix: str) -> None:
@@ -1520,11 +1524,27 @@ def render_custom_page(simulations: int, seed: int, home_advantage: float, base_
                 st.error(issue)
             st.session_state["custom_paste_status"] = None
         else:
-            apply_pasted_values(parsed, "custom")
-            st.session_state["custom_paste_status"] = f"Mappati {len(parsed)} campi."
+            mapped_advanced = apply_pasted_values(parsed, "custom")
+            verified = [
+                field for field in mapped_advanced
+                if (
+                    field in {"home_momentum", "away_momentum", "home_absence_impact", "away_absence_impact",
+                              "referee_yellow_avg", "referee_red_avg", "referee_fouls_avg"}
+                    or field.endswith("_stakes")
+                )
+            ]
+            if verified:
+                st.session_state["custom_paste_status"] = (
+                    f"Parametri avanzati mappati e verificati: {', '.join(verified)}."
+                )
+            else:
+                st.session_state["custom_paste_status"] = f"Mappati {len(parsed)} campi."
             st.rerun()
     if st.session_state.get("custom_paste_status"):
-        st.caption(st.session_state["custom_paste_status"])
+        if "Parametri avanzati" in st.session_state["custom_paste_status"]:
+            st.success(st.session_state["custom_paste_status"])
+        else:
+            st.caption(st.session_state["custom_paste_status"])
     left, right = st.columns(2)
     with left:
         home_team = team_editor("Casa", defaults_home, "custom_home")

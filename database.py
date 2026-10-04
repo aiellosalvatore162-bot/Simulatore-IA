@@ -135,17 +135,35 @@ def init_db(db_path: Optional[str | Path] = None) -> None:
 
 
 def ensure_production_database(db_path: Optional[str | Path] = None) -> bool:
-    """Garantisce lo schema e popola un database vuoto con lo snapshot iniziale."""
-    init_db(db_path)
-    conn = get_db_connection(db_path)
+    """Ricrea e popola automaticamente un DB vuoto o SQLite corrotto."""
+    target_path = Path(db_path or DB_FILE)
     try:
-        has_leagues = conn.execute("SELECT 1 FROM leagues LIMIT 1").fetchone() is not None
-    finally:
-        conn.close()
+        init_db(target_path)
+        conn = get_db_connection(target_path)
+        try:
+            tables = {
+                row["name"]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            required = {"leagues", "teams", "matches", "standings", "top_scorers"}
+            has_leagues = conn.execute("SELECT 1 FROM leagues LIMIT 1").fetchone() is not None
+            if not required.issubset(tables):
+                raise sqlite3.DatabaseError("schema SQLite incompleto")
+        finally:
+            conn.close()
+    except (sqlite3.DatabaseError, OSError):
+        # Il file e' esclusivamente il database applicativo attivo: rimuoverlo
+        # consente a init_db/seed di ricrearlo senza intervento manuale.
+        if target_path.exists():
+            target_path.unlink()
+        init_db(target_path)
+        has_leagues = False
     if has_leagues:
         return False
     from seed import seed_database
-    seed_database(db_path)
+    seed_database(target_path)
     return True
 
 
