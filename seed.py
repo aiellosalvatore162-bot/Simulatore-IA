@@ -60,6 +60,10 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
                 "Champions League",
             )),),
         )
+        cur.execute(
+            """INSERT OR REPLACE INTO app_metadata (key, value)
+            VALUES ('matches_season_migration', '2026/2027')"""
+        )
 
         # 1. LEAGUES
         leagues_data = [
@@ -334,8 +338,8 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
                 ))
 
         cur.executemany("""
-            INSERT INTO matches (league_id, matchday, match_date, home_team_id, away_team_id, status, home_goals, away_goals, home_xg, away_xg)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO matches (league_id, matchday, match_date, home_team_id, away_team_id, season, status, home_goals, away_goals, home_xg, away_xg)
+            VALUES (?, ?, ?, ?, ?, '2026/2027', ?, ?, ?, ?, ?)
         """, matches_insert)
 
         cur.execute("SELECT id, league_id FROM teams")
@@ -350,8 +354,8 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
             if len(serie_a) >= 2:
                 cur.execute(
                     """INSERT INTO matches
-                    (league_id, matchday, match_date, home_team_id, away_team_id, status)
-                    VALUES (1, 'Giornata 1', '2026-08-23', ?, ?, 'scheduled')""",
+                    (league_id, matchday, match_date, home_id, away_id, season, status)
+                    VALUES (1, 'Giornata 1', '2026-08-23', ?, ?, '2026/2027', 'scheduled')""",
                     (serie_a[0], serie_a[1]),
                 )
 
@@ -391,8 +395,8 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
                     match_date = (date(2026, 8, 15) + timedelta(days=7 * round_index)).isoformat()
                     cur.execute(
                         """INSERT INTO matches
-                        (league_id, matchday, match_date, home_team_id, away_team_id, status)
-                        VALUES (?, ?, ?, ?, ?, 'scheduled')""",
+                        (league_id, matchday, match_date, home_team_id, away_team_id, season, status)
+                        VALUES (?, ?, ?, ?, ?, '2026/2027', 'scheduled')""",
                         (league_id, matchday, match_date, home_id, away_id),
                     )
                     existing_pairs.add((league_id, home_id, away_id))

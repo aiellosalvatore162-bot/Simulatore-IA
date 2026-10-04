@@ -68,6 +68,7 @@ def init_db(db_path: Optional[str | Path] = None) -> None:
             match_date TEXT NOT NULL,
             home_team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
             away_team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+            season TEXT NOT NULL DEFAULT '2026/2027',
             status TEXT NOT NULL DEFAULT 'scheduled', -- 'scheduled' o 'completed'
             home_goals INTEGER DEFAULT NULL,
             away_goals INTEGER DEFAULT NULL,
@@ -146,6 +147,15 @@ def init_db(db_path: Optional[str | Path] = None) -> None:
         team_columns = {row["name"] for row in conn.execute("PRAGMA table_info(teams)")}
         if "xg_source" not in team_columns:
             conn.execute("ALTER TABLE teams ADD COLUMN xg_source TEXT NOT NULL DEFAULT 'not_available'")
+        match_columns = {row["name"] for row in conn.execute("PRAGMA table_info(matches)")}
+        if "season" not in match_columns:
+            conn.execute(
+                "ALTER TABLE matches ADD COLUMN season TEXT NOT NULL DEFAULT '2026/2027'"
+            )
+            conn.execute(
+                """INSERT OR REPLACE INTO app_metadata (key, value)
+                   VALUES ('matches_season_migration', 'legacy')"""
+            )
     conn.close()
 
 
@@ -159,6 +169,7 @@ def ensure_production_database(db_path: Optional[str | Path] = None) -> bool:
     current_season = False
     current_competitions = False
     has_all_managed_leagues = False
+    current_match_season = False
     try:
         init_db(target_path)
         conn = get_db_connection(target_path)
@@ -180,6 +191,12 @@ def ensure_production_database(db_path: Optional[str | Path] = None) -> bool:
             current_competitions = (
                 competitions_row is not None
                 and competitions_row["value"] == "|".join(MANAGED_COMPETITIONS)
+            )
+            migration_row = conn.execute(
+                "SELECT value FROM app_metadata WHERE key = 'matches_season_migration'"
+            ).fetchone()
+            current_match_season = (
+                migration_row is not None and migration_row["value"] == "2026/2027"
             )
             has_leagues = conn.execute("SELECT 1 FROM leagues LIMIT 1").fetchone() is not None
             has_scheduled_serie_a = (
@@ -217,6 +234,17 @@ def ensure_production_database(db_path: Optional[str | Path] = None) -> bool:
                 """,
                 MANAGED_COMPETITIONS,
             ).fetchone() is not None
+            invalid_match_season = conn.execute(
+                f"""
+                SELECT 1
+                FROM matches AS m
+                JOIN leagues AS l ON l.id = m.league_id
+                WHERE l.name IN ({placeholders})
+                  AND (m.season IS NULL OR m.season != '2026/2027')
+                LIMIT 1
+                """,
+                MANAGED_COMPETITIONS,
+            ).fetchone() is not None
             has_all_managed_leagues = conn.execute(
                 f"SELECT COUNT(*) AS count FROM leagues WHERE name IN ({placeholders})",
                 MANAGED_COMPETITIONS,
@@ -239,6 +267,8 @@ def ensure_production_database(db_path: Optional[str | Path] = None) -> bool:
         and not invalid_managed_dates
         and current_season
         and current_competitions
+        and current_match_season
+        and not invalid_match_season
     ):
         return False
     from seed import seed_database
