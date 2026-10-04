@@ -419,7 +419,7 @@ def parse_bookmaker_odds(text: str) -> Dict[str, float]:
 
 
 def apply_pasted_values(parsed: Dict[str, Any], widget_prefix: str) -> List[str]:
-    """Aggiorna soltanto le chiavi riconosciute; gli altri input restano intatti."""
+    """Aggiorna i widget per ogni campo riconosciuto e restituisce il riepilogo."""
     mapped_advanced: List[str] = []
     team_fields = ("name", "attack", "defense", "elo", "cards_factor", "corners_factor", "xg_for", "xg_against", "recent_form")
     for side in ("home", "away"):
@@ -427,6 +427,13 @@ def apply_pasted_values(parsed: Dict[str, Any], widget_prefix: str) -> List[str]
             key = f"{side}_{field}"
             if key in parsed:
                 st.session_state[f"{widget_prefix}_{side}_{field if field != 'cards_factor' else 'cards'}"] = parsed[key]
+                mapped_advanced.append(key)
+        for field in ("xg_for", "xg_against"):
+            specific_key = f"{side}_{field}"
+            if specific_key in parsed:
+                st.session_state[f"{widget_prefix}_{side}_{field}"] = parsed[specific_key]
+                if specific_key not in mapped_advanced:
+                    mapped_advanced.append(specific_key)
     advanced_keys = {
         "home_momentum": f"{widget_prefix}_home_momentum", "away_momentum": f"{widget_prefix}_away_momentum",
         "home_absence_impact": f"{widget_prefix}_home_absence", "away_absence_impact": f"{widget_prefix}_away_absence",
@@ -474,6 +481,7 @@ def apply_pasted_values(parsed: Dict[str, Any], widget_prefix: str) -> List[str]
             st.session_state[state_key] = None
     for quote_key, quote in parsed.get("bookmaker_odds", {}).items():
         st.session_state[f"odds_{quote_key.replace(':', '_')}"] = quote
+        mapped_advanced.append(f"odds_{quote_key}")
     return mapped_advanced
 
 
@@ -501,8 +509,33 @@ def load_matches(league_id: int) -> List[Dict[str, Any]]:
 
 
 def ensure_production_database() -> None:
-    """Verifica e ripara lo snapshot locale della stagione corrente."""
+    """Verifica e ripara lo snapshot locale, anche dopo un deploy persistente."""
     database.ensure_production_database()
+    status = database_status()
+    expected_matches = getattr(database, "EXPECTED_MATCH_COUNT", 6690)
+    if status["season"] != CURRENT_SEASON or status["matches"] != expected_matches:
+        database.ensure_production_database(force=True)
+
+
+def database_status() -> Dict[str, Any]:
+    """Restituisce il percorso e la versione del database realmente usati dall'app."""
+    connection = database.get_db_connection()
+    try:
+        season = connection.execute(
+            "SELECT value FROM app_metadata WHERE key = 'season'"
+        ).fetchone()
+        snapshot = connection.execute(
+            "SELECT value FROM app_metadata WHERE key = 'database_snapshot'"
+        ).fetchone()
+        matches = connection.execute("SELECT COUNT(*) AS count FROM matches").fetchone()
+        return {
+            "path": str(database.DB_FILE.resolve()),
+            "season": season["value"] if season else "non impostata",
+            "snapshot": snapshot["value"] if snapshot else "non versionato",
+            "matches": int(matches["count"]) if matches else 0,
+        }
+    finally:
+        connection.close()
 
 
 def load_standings(league_id: int) -> List[Dict[str, Any]]:
@@ -1548,19 +1581,14 @@ def render_custom_page(simulations: int, seed: int, home_advantage: float, base_
             for issue in parsed.issues:
                 st.error(issue)
         mapped_advanced = apply_pasted_values(parsed, "custom")
-        verified = [
-            field for field in mapped_advanced
-            if field in {"home_momentum", "away_momentum", "home_absence_impact", "away_absence_impact",
-                         "referee_yellow_avg", "referee_red_avg", "referee_fouls_avg"}
-            or field.endswith("_stakes")
-        ]
+        verified = mapped_advanced
         st.session_state["custom_paste_status"] = (
-            f"Parametri avanzati mappati e verificati: {', '.join(verified)}."
-            if verified else f"Mappati {len(parsed)} campi validi."
+            f"Mappati {len(verified)} campi: {', '.join(verified)}."
+            if verified else "Nessun campo valido mappato."
         )
         st.rerun()
     if st.session_state.get("custom_paste_status"):
-        if "Parametri avanzati" in st.session_state["custom_paste_status"]:
+        if st.session_state["custom_paste_status"].startswith("Mappati"):
             st.success(st.session_state["custom_paste_status"])
         else:
             st.caption(st.session_state["custom_paste_status"])
@@ -1592,6 +1620,13 @@ def main() -> None:
     render_main_navigation()
     with st.expander("Servizio database", expanded=False):
         season = CURRENT_SEASON
+        status = database_status()
+        st.caption(
+            f"Database attivo: `{status['path']}` · "
+            f"stagione `{status['season']}` · "
+            f"snapshot `{status['snapshot']}` · "
+            f"{status['matches']} partite"
+        )
         st.caption(f"Sincronizzazione esplicita della stagione {season}.")
         if st.button(f"Forza sincronizzazione database {season}", key="force_sync"):
             with st.spinner(f"Sincronizzazione stagione {season} in corso..."):

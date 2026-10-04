@@ -14,6 +14,7 @@ DB_PATH = os.path.join(BASE_DIR, "data.db")
 DB_FILE = Path(DB_PATH)
 CURRENT_SEASON = "2026/2027"
 DATABASE_SNAPSHOT = "2026/2027-complete-v1"
+EXPECTED_MATCH_COUNT = 6690
 MANAGED_COMPETITIONS = (
     "Serie A",
     "Premier League",
