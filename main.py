@@ -159,7 +159,8 @@ def sync_data_endpoint(season: Optional[int] = Query(None, ge=2000, le=2100)):
     try:
         return data_sync.sync_current_season(season=season)
     except data_sync.FootballDataError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        status_code = 400 if season is not None and season != data_sync.CURRENT_SEASON else 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 # --- ENDPOINTS CONSULTAZIONE DATABASE ---

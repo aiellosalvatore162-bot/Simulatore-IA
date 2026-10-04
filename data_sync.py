@@ -16,9 +16,11 @@ from database import DB_FILE, get_db_connection, init_db
 
 FOOTBALL_DATA_BASE_URL = "https://api.football-data.org/v4"
 SOFASCORE_BASE_URL = "https://www.sofascore.com/api/v1"
-# Il prodotto e' dedicato alla stagione 2026/2027; l'ambiente puo' comunque
-# sovrascriverla con FOOTBALL_DATA_SEASON o con il parametro season.
-DEFAULT_SEASON = 2026
+# La piattaforma supporta esclusivamente la stagione 2026/2027. Non usare
+# variabili d'ambiente o valori provenienti dalla richiesta per cambiarla:
+# alcuni provider altrimenti ricadono silenziosamente sulla stagione precedente.
+CURRENT_SEASON = 2026
+DEFAULT_SEASON = CURRENT_SEASON
 
 # Codici ufficiali football-data.org. Le competizioni non disponibili per il
 # piano/API in uso vengono riportate come errore, senza dati inventati.
@@ -54,7 +56,7 @@ class FootballDataError(RuntimeError):
 
 
 def _request_json(path: str, api_key: str) -> Dict[str, Any]:
-    query = urlencode({"season": os.getenv("FOOTBALL_DATA_SEASON", str(DEFAULT_SEASON))})
+    query = urlencode({"season": str(CURRENT_SEASON)})
     request = Request(
         f"{FOOTBALL_DATA_BASE_URL}{path}?{query}",
         headers={"X-Auth-Token": api_key, "Accept": "application/json"},
@@ -90,6 +92,10 @@ def _sofascore_request(path: str) -> Dict[str, Any]:
 
 
 def _sofascore_season(code: str, season: int) -> int:
+    if season != CURRENT_SEASON:
+        raise FootballDataError(
+            f"Stagione non supportata: richiesto {season}, attesa {CURRENT_SEASON}"
+        )
     payload = _sofascore_request(f"/unique-tournament/{SOFASCORE_TOURNAMENTS[code]}/seasons")
     seasons = payload.get("seasons", [])
     wanted = str(season)
@@ -367,9 +373,15 @@ def sync_current_season(
     competition_codes: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     """Scarica e sostituisce i dati delle competizioni richieste."""
+    if season is not None and season != CURRENT_SEASON:
+        raise FootballDataError(
+            f"La sincronizzazione supporta esclusivamente la stagione {CURRENT_SEASON}/2027"
+        )
     api_key = os.getenv("FOOTBALL_DATA_API_KEY")
-    selected_season = season or int(os.getenv("FOOTBALL_DATA_SEASON", DEFAULT_SEASON))
-    os.environ["FOOTBALL_DATA_SEASON"] = str(selected_season)
+    selected_season = CURRENT_SEASON
+    # Mantiene eventuali integrazioni esterne coerenti, ma il valore usato
+    # nelle richieste resta comunque quello costante sopra.
+    os.environ["FOOTBALL_DATA_SEASON"] = str(CURRENT_SEASON)
     configured_competitions = os.getenv("FOOTBALL_DATA_COMPETITIONS")
     if competition_codes:
         selected = list(competition_codes)

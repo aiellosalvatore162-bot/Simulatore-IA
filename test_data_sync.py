@@ -80,6 +80,18 @@ def test_sync_rejects_unknown_competition(monkeypatch, tmp_path):
         raise AssertionError("La sincronizzazione deve rifiutare codici sconosciuti")
 
 
+def test_sync_rejects_previous_season(monkeypatch, tmp_path):
+    monkeypatch.setenv("FOOTBALL_DATA_SEASON", "2025")
+    try:
+        data_sync.sync_current_season(
+            season=2025, db_path=tmp_path / "previous.db", competition_codes=["SA"]
+        )
+    except data_sync.FootballDataError as exc:
+        assert "2026/2027" in str(exc)
+    else:
+        raise AssertionError("La sincronizzazione non deve accettare la stagione 2025")
+
+
 def test_sync_falls_back_to_offline_seed_when_providers_fail(monkeypatch, tmp_path):
     monkeypatch.delenv("FOOTBALL_DATA_API_KEY", raising=False)
     monkeypatch.setattr(
