@@ -1,4 +1,5 @@
-from streamlit_app import parse_team_paste
+import pytest
+from streamlit_app import PasteParseError, parse_team_paste
 
 
 def test_parse_team_paste_accepts_case_accents_and_dash_separators():
@@ -25,15 +26,16 @@ def test_parse_team_paste_accepts_case_accents_and_dash_separators():
 
 
 def test_parse_team_paste_logs_unmatched_lines(capsys):
-    parsed = parse_team_paste(
-        """
-        CASA:
-        Etichetta inesistente: 42
-        Attacco senza valore:
-        """
-    )
+    with pytest.raises(PasteParseError) as error:
+        parse_team_paste(
+            """
+            CASA:
+            Etichetta inesistente: 42
+            Attacco senza valore:
+            """
+        )
 
     captured = capsys.readouterr()
     assert "etichetta non riconosciuta" in captured.err
     assert "chiave o valore vuoto" in captured.err
-    assert "home_attack" not in parsed
+    assert len(error.value.issues) == 2

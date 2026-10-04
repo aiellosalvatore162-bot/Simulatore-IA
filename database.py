@@ -134,6 +134,21 @@ def init_db(db_path: Optional[str | Path] = None) -> None:
     conn.close()
 
 
+def ensure_production_database(db_path: Optional[str | Path] = None) -> bool:
+    """Garantisce lo schema e popola un database vuoto con lo snapshot iniziale."""
+    init_db(db_path)
+    conn = get_db_connection(db_path)
+    try:
+        has_leagues = conn.execute("SELECT 1 FROM leagues LIMIT 1").fetchone() is not None
+    finally:
+        conn.close()
+    if has_leagues:
+        return False
+    from seed import seed_database
+    seed_database(db_path)
+    return True
+
+
 # Funzioni di utilità per query di lettura
 
 def get_all_leagues(db_path: Optional[str | Path] = None) -> List[Dict[str, Any]]:

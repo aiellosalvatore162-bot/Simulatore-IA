@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import streamlit as st
 import database
+import data_sync
 from engine import (
     MatchConfig,
     TeamParams,
@@ -132,10 +133,19 @@ def _optional_number(value: Any) -> Optional[float]:
     return None if pd.isna(number) else number
 
 
+class PasteParseError(ValueError):
+    """Indica che una o piu' righe del testo incollato non sono interpretabili."""
+
+    def __init__(self, issues: List[str]):
+        self.issues = issues
+        super().__init__("; ".join(issues))
+
+
 def parse_team_paste(text: str) -> Dict[str, Any]:
     """Estrae campi squadra e avanzati da testo libero senza inventare valori."""
     parsed: Dict[str, Any] = {"bookmaker_odds": {}}
     section: Optional[str] = None
+    issues: List[str] = []
 
     def normalize_label(value: str) -> str:
         without_accents = unicodedata.normalize("NFKD", value)
@@ -143,10 +153,9 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
         return re.sub(r"[^a-z0-9]+", " ", without_accents.lower()).strip()
 
     def report_parser_issue(line_number: int, raw_line: str, reason: str) -> None:
-        print(
-            f"[team-paste-parser] riga {line_number}: {reason}; testo={raw_line!r}",
-            file=sys.stderr,
-        )
+        message = f"Riga {line_number}: {reason} ({raw_line.strip()!r})"
+        issues.append(message)
+        print(f"[team-paste-parser] {message}", file=sys.stderr)
 
     aliases = {
         "nome": "name", "squadra": "name", "nome casa": "home_name", "nome ospite": "away_name",
@@ -268,6 +277,8 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
                 parsed[f"{section}_{field}"] = number
             else:
                 parsed[field] = number
+    if issues:
+        raise PasteParseError(issues)
     return parsed
 
 
@@ -401,6 +412,20 @@ def apply_pasted_values(parsed: Dict[str, Any], widget_prefix: str) -> None:
         st.session_state[f"odds_{quote_key.replace(':', '_')}"] = quote
 
 
+def clear_pasted_values(widget_prefix: str) -> None:
+    """Rimuove valori precedenti dopo un parsing fallito, evitando fallback impliciti."""
+    keys = [
+        "name", "attack", "defense", "elo", "cards", "corners", "xg_for", "xg_against",
+        "form", "momentum", "absence", "stakes", "ref_yellows", "ref_reds", "ref_fouls",
+    ]
+    for side in ("home", "away"):
+        for field in keys:
+            st.session_state.pop(f"{widget_prefix}_{side}_{field}", None)
+    for key in list(st.session_state):
+        if key.startswith("odds_"):
+            st.session_state.pop(key, None)
+
+
 @st.cache_data(ttl=15, show_spinner=False)
 def load_competitions() -> List[Dict[str, Any]]:
     return database.get_all_leagues()
@@ -410,6 +435,11 @@ def load_competitions() -> List[Dict[str, Any]]:
 def load_matches(league_id: int) -> List[Dict[str, Any]]:
     matches = database.get_matches(league_id=league_id, limit=500)
     return matches if matches else []
+
+
+def ensure_production_database() -> None:
+    """Crea uno snapshot iniziale solo se il DB attivo e' realmente vuoto."""
+    database.ensure_production_database()
 
 
 @st.cache_data(ttl=15, show_spinner=False)
@@ -1454,10 +1484,18 @@ def render_custom_page(simulations: int, seed: int, home_advantage: float, base_
         height=150,
     )
     if st.button("Mappa dati incollati", key="map_custom_paste", width="stretch"):
-        parsed = parse_team_paste(paste)
-        apply_pasted_values(parsed, "custom")
-        st.session_state["custom_paste_status"] = f"Mappati {len(parsed)} campi; i campi non presenti sono rimasti invariati."
-        st.rerun()
+        clear_pasted_values("custom")
+        try:
+            parsed = parse_team_paste(paste)
+        except PasteParseError as exc:
+            st.error("Parsing fallito: nessuna modifica applicata.")
+            for issue in exc.issues:
+                st.error(issue)
+            st.session_state["custom_paste_status"] = None
+        else:
+            apply_pasted_values(parsed, "custom")
+            st.session_state["custom_paste_status"] = f"Mappati {len(parsed)} campi."
+            st.rerun()
     if st.session_state.get("custom_paste_status"):
         st.caption(st.session_state["custom_paste_status"])
     left, right = st.columns(2)
@@ -1479,12 +1517,28 @@ def render_custom_page(simulations: int, seed: int, home_advantage: float, base_
 
 
 def main() -> None:
+    ensure_production_database()
     init_navigation()
     st.markdown(
         "<div class='hero'><h1>Simulatore IA</h1><p>Monte Carlo Dixon-Coles per esplorare scenari, mercati e value bet.</p></div>",
         unsafe_allow_html=True,
     )
     render_main_navigation()
+    with st.expander("Servizio database", expanded=False):
+        st.caption("Sincronizzazione esplicita della stagione 2026/2027.")
+        if st.button("Forza Sincronizzazione Database 2026/2027", key="force_sync_2026"):
+            with st.spinner("Sincronizzazione stagione 2026/2027 in corso..."):
+                try:
+                    sync_result = data_sync.sync_current_season(season=2026)
+                except (data_sync.FootballDataError, sqlite3.Error, OSError, ValueError) as exc:
+                    st.error(f"Sincronizzazione fallita: {exc}")
+                else:
+                    load_competitions.clear()
+                    load_matches.clear()
+                    st.success(
+                        f"Sincronizzazione completata: {len(sync_result['synced'])} competizioni, "
+                        f"{len(sync_result['errors'])} errori."
+                    )
 
     simulations = 100_000
     seed = 42
