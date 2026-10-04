@@ -177,6 +177,7 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
         "cards": "cards_factor", "fattore corner": "corners_factor", "fattore corners": "corners_factor",
         "corner": "corners_factor", "corners": "corners_factor", "calci dangolo": "corners_factor",
         "calci d angolo": "corners_factor", "xg fatti": "xg_for",
+        "xg": "xg_for", "expected goals": "xg_for", "expected goals fatti": "xg_for",
         "xg subiti": "xg_against", "xg fatti casa": "home_xg_for", "xg subiti casa": "home_xg_against",
         "xg fatti ospite": "away_xg_for", "xg subiti ospite": "away_xg_against",
         "momentum": "momentum", "momentum recente": "momentum",
@@ -221,6 +222,15 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
         if normalized_line in section_headers:
             section = section_headers[normalized_line]
             continue
+        if normalized_line.startswith(("parametri casa", "dati casa", "squadra casa")):
+            section = "home"
+            continue
+        if normalized_line.startswith(("parametri ospite", "dati ospite", "squadra ospite")):
+            section = "away"
+            continue
+        if normalized_line.startswith(("profilo arbitrale", "dati arbitro")):
+            section = "referee"
+            continue
 
         # Il trattino e' un separatore solo quando e' isolato da spazi:
         # evita di spezzare etichette composte come "Fattore-Corners".
@@ -242,6 +252,11 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
             if key.startswith(prefix):
                 section = prefixed_section
                 key = key[len(prefix):].strip()
+                break
+        for suffix, suffixed_section in ((" casa", "home"), (" home", "home"), (" ospite", "away"), (" away", "away")):
+            if key.endswith(suffix):
+                section = suffixed_section
+                key = key[: -len(suffix)].strip()
                 break
 
         if section is None:
@@ -266,7 +281,7 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
             candidates = [
                 (alias, alias_field)
                 for alias, alias_field in aliases.items()
-                if alias in key or key in alias or SequenceMatcher(None, alias, key).ratio() >= 0.72
+                if alias in key or key in alias or SequenceMatcher(None, alias, key).ratio() >= 0.65
             ]
             if candidates:
                 field = max(candidates, key=lambda item: len(item[0]))[1]

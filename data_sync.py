@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 from urllib.error import HTTPError, URLError
@@ -102,7 +103,8 @@ def _sofascore_season(code: str, season: int) -> int:
 def _sofascore_events(code: str, season_id: int) -> Iterable[Dict[str, Any]]:
     events: list[Dict[str, Any]] = []
     for direction in ("last", "next"):
-        for page in range(0, 10):
+        page = 0
+        while page < 100:
             payload = _sofascore_request(
                 f"/unique-tournament/{SOFASCORE_TOURNAMENTS[code]}/season/{season_id}/events/{direction}/{page}"
             )
@@ -110,6 +112,7 @@ def _sofascore_events(code: str, season_id: int) -> Iterable[Dict[str, Any]]:
             events.extend(batch)
             if not payload.get("hasNextPage") or not batch:
                 break
+            page += 1
     return {event["id"]: event for event in events if event.get("id")}.values()
 
 
@@ -196,6 +199,8 @@ def _sync_sofascore_competition(
         f"/unique-tournament/{SOFASCORE_TOURNAMENTS[code]}/season/{season_id}/standings/overall"
     )
     rows = standings_payload.get("standings", [{}])[0].get("rows", [])
+    if not rows:
+        raise FootballDataError(f"SofaScore: classifica vuota per {league_name}")
     for row in rows:
         team_id = _team_id(conn, _sofascore_team(row.get("team")), league_id, league_name, teams, used_names)
         if not team_id:
@@ -301,6 +306,10 @@ def _sync_competition(
     table = next((item for item in standings_payload.get("standings", []) if item.get("type") == "TOTAL"), None)
     standings = (table or {}).get("table", [])
     scorers = scorers_payload.get("scorers", [])
+    if not matches:
+        raise FootballDataError(f"football-data.org: calendario vuoto per {league_name}")
+    if not standings:
+        raise FootballDataError(f"football-data.org: classifica vuota per {league_name}")
 
     for match in matches:
         home_id = _team_id(conn, match.get("homeTeam"), league_id, league_name, teams, used_names)
@@ -380,33 +389,44 @@ def sync_current_season(
     try:
         with conn:
             selected_league_ids = [_competition_id(conn, COMPETITIONS[code]) for code in selected]
-            placeholders = ",".join("?" for _ in selected_league_ids)
-            conn.execute(
-                f"""DELETE FROM h2h_matches
-                WHERE home_team_id IN (SELECT id FROM teams WHERE league_id IN ({placeholders}))
-                   OR away_team_id IN (SELECT id FROM teams WHERE league_id IN ({placeholders}))""",
-                selected_league_ids + selected_league_ids,
-            )
-            conn.execute(f"DELETE FROM matches WHERE league_id IN ({placeholders})", selected_league_ids)
-            conn.execute(f"DELETE FROM top_scorers WHERE league_id IN ({placeholders})", selected_league_ids)
-            conn.execute(f"DELETE FROM standings WHERE league_id IN ({placeholders})", selected_league_ids)
-            conn.execute(f"DELETE FROM teams WHERE league_id IN ({placeholders})", selected_league_ids)
             teams: Dict[tuple[int, int], int] = {}
             used_names = {row["name"] for row in conn.execute("SELECT name FROM teams")}
             for code in selected:
+                savepoint = f"sync_{code.lower().replace('-', '_')}"
+                conn.execute(f"SAVEPOINT {savepoint}")
                 try:
+                    league_id = _competition_id(conn, COMPETITIONS[code])
+                    conn.execute(
+                        """DELETE FROM h2h_matches
+                        WHERE home_team_id IN (SELECT id FROM teams WHERE league_id = ?)
+                           OR away_team_id IN (SELECT id FROM teams WHERE league_id = ?)""",
+                        (league_id, league_id),
+                    )
+                    conn.execute("DELETE FROM matches WHERE league_id = ?", (league_id,))
+                    conn.execute("DELETE FROM top_scorers WHERE league_id = ?", (league_id,))
+                    conn.execute("DELETE FROM standings WHERE league_id = ?", (league_id,))
+                    conn.execute("DELETE FROM teams WHERE league_id = ?", (league_id,))
                     if api_key:
                         results.append(_sync_competition(conn, code, selected_season, api_key, teams, used_names))
                     else:
                         results.append(_sync_sofascore_competition(conn, code, selected_season, teams, used_names))
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                 except FootballDataError as exc:
                     if api_key and exc.status_code in {403, 404}:
+                        conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
                         try:
                             results.append(_sync_sofascore_competition(conn, code, selected_season, teams, used_names))
+                            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                             continue
                         except FootballDataError as fallback_exc:
                             exc = fallback_exc
+                    conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                     errors.append({"code": code, "league": COMPETITIONS[code], "error": str(exc)})
+                    print(
+                        f"[data-sync] {code} non sincronizzato: {exc}. Dati precedenti preservati.",
+                        file=sys.stderr,
+                    )
                     if exc.status_code not in {403, 404}:
                         fatal_errors.append(exc)
             _recalculate_imported_team_stats(conn, selected_league_ids)
