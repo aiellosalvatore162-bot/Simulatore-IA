@@ -205,7 +205,7 @@ def get_matches(
     league_id: Optional[int] = Query(None, description="Filtra per campionato"),
     status: Optional[str] = Query(None, description="Filtra per stato ('scheduled' o 'completed')"),
     matchday: Optional[str] = Query(None, description="Filtra per giornata"),
-    limit: int = Query(50, ge=1, le=500)
+    limit: int = Query(2000, ge=1, le=2000)
 ):
     """Restituisce il calendario e risultati delle partite."""
     return database.get_matches(league_id=league_id, status=status, matchday=matchday, limit=limit)

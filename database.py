@@ -368,7 +368,7 @@ def get_matches(
     league_id: Optional[int] = None,
     status: Optional[str] = None,
     matchday: Optional[str] = None,
-    limit: int = 50,
+    limit: int = 2000,
     db_path: Optional[str | Path] = None
 ) -> List[Dict[str, Any]]:
     conn = get_db_connection(db_path)
