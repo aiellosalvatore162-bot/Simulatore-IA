@@ -13,6 +13,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "data.db")
 DB_FILE = Path(DB_PATH)
 CURRENT_SEASON = "2026/2027"
+DATABASE_SNAPSHOT = "2026/2027-complete-v1"
 MANAGED_COMPETITIONS = (
     "Serie A",
     "Premier League",
@@ -198,6 +199,7 @@ def ensure_production_database(
     current_competitions = False
     has_all_managed_leagues = False
     current_match_season = False
+    current_snapshot = False
     try:
         init_db(target_path)
         conn = get_db_connection(target_path)
@@ -225,6 +227,13 @@ def ensure_production_database(
             ).fetchone()
             current_match_season = (
                 migration_row is not None and migration_row["value"] == CURRENT_SEASON
+            )
+            snapshot_row = conn.execute(
+                "SELECT value FROM app_metadata WHERE key = 'database_snapshot'"
+            ).fetchone()
+            current_snapshot = (
+                snapshot_row is not None
+                and snapshot_row["value"] == DATABASE_SNAPSHOT
             )
             has_leagues = conn.execute("SELECT 1 FROM leagues LIMIT 1").fetchone() is not None
             has_scheduled_serie_a = (
@@ -296,6 +305,7 @@ def ensure_production_database(
         and current_season
         and current_competitions
         and current_match_season
+        and current_snapshot
         and not invalid_match_season
     ):
         return False
@@ -427,6 +437,8 @@ def get_matches(
     if matchday is not None:
         query += " AND m.matchday = ?"
         params.append(matchday)
+    query += " AND m.season = ?"
+    params.append(CURRENT_SEASON)
     
     query += " ORDER BY m.match_date ASC, m.id ASC LIMIT ?"
     params.append(limit)

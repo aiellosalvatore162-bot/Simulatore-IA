@@ -491,12 +491,10 @@ def clear_pasted_values(widget_prefix: str) -> None:
             st.session_state.pop(key, None)
 
 
-@st.cache_data(ttl=15, show_spinner=False)
 def load_competitions() -> List[Dict[str, Any]]:
     return database.get_all_leagues()
 
 
-@st.cache_data(ttl=15, show_spinner=False)
 def load_matches(league_id: int) -> List[Dict[str, Any]]:
     matches = database.get_matches(league_id=league_id, limit=5000)
     return matches if matches else []
@@ -507,12 +505,10 @@ def ensure_production_database() -> None:
     database.ensure_production_database()
 
 
-@st.cache_data(ttl=15, show_spinner=False)
 def load_standings(league_id: int) -> List[Dict[str, Any]]:
     return database.get_standings_by_league(league_id)
 
 
-@st.cache_data(ttl=15, show_spinner=False)
 def load_scorers(league_id: int) -> List[Dict[str, Any]]:
     return database.get_top_scorers_by_league(league_id, limit=20)
 
@@ -1404,10 +1400,6 @@ def render_league_page(league: Dict[str, Any]) -> None:
     with refresh_col:
         refresh = st.button("Aggiorna dati", key=f"refresh_league_{league_id}", width="stretch")
     if refresh:
-        load_standings.clear()
-        load_scorers.clear()
-        load_matches.clear()
-        load_competitions.clear()
         st.session_state["league_data_refresh"] = datetime.now().strftime("%H:%M:%S")
         st.rerun()
     with status_col:
@@ -1608,8 +1600,6 @@ def main() -> None:
                 except (sqlite3.Error, OSError, ValueError) as exc:
                     st.error(f"Sincronizzazione fallita: {exc}")
                 else:
-                    load_competitions.clear()
-                    load_matches.clear()
                     st.success(
                         f"Database rigenerato con il seed locale completo della stagione {season}."
                     )

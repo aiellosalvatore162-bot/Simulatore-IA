@@ -22,7 +22,13 @@ from pathlib import Path
 import sqlite3
 from datetime import date, timedelta
 from typing import Optional
-from database import CURRENT_SEASON, DB_FILE, init_db, get_db_connection
+from database import (
+    CURRENT_SEASON,
+    DATABASE_SNAPSHOT,
+    DB_FILE,
+    init_db,
+    get_db_connection,
+)
 from updater import recalculate_league_standings
 
 
@@ -82,6 +88,11 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
             """INSERT OR REPLACE INTO app_metadata (key, value)
             VALUES ('matches_season_migration', ?)""",
             (CURRENT_SEASON,),
+        )
+        cur.execute(
+            """INSERT OR REPLACE INTO app_metadata (key, value)
+            VALUES ('database_snapshot', ?)""",
+            (DATABASE_SNAPSHOT,),
         )
 
         # 1. LEAGUES
