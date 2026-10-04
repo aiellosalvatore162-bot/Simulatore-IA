@@ -4,11 +4,15 @@ Definisce lo schema e le operazioni CRUD per:
 Leagues, Teams, Matches, Standings, TopScorers.
 """
 
+import os
 from pathlib import Path
 import sqlite3
 from typing import Any, Dict, List, Optional
 
-DB_FILE = Path(__file__).resolve().parent / "data.db"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "data.db")
+DB_FILE = Path(DB_PATH)
+CURRENT_SEASON = "2026/2027"
 MANAGED_COMPETITIONS = (
     "Serie A",
     "Premier League",
@@ -38,7 +42,7 @@ def init_db(db_path: Optional[str | Path] = None) -> None:
     """Inizializza le tabelle relazionali nel database SQLite."""
     conn = get_db_connection(db_path)
     with conn:
-        conn.executescript("""
+        conn.executescript(f"""
         CREATE TABLE IF NOT EXISTS leagues (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
@@ -72,7 +76,7 @@ def init_db(db_path: Optional[str | Path] = None) -> None:
             match_date TEXT NOT NULL,
             home_team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
             away_team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-            season TEXT NOT NULL DEFAULT '2026/2027',
+            season TEXT NOT NULL DEFAULT '{CURRENT_SEASON}',
             status TEXT NOT NULL DEFAULT 'scheduled', -- 'scheduled' o 'completed'
             home_goals INTEGER DEFAULT NULL,
             away_goals INTEGER DEFAULT NULL,
@@ -154,7 +158,7 @@ def init_db(db_path: Optional[str | Path] = None) -> None:
         match_columns = {row["name"] for row in conn.execute("PRAGMA table_info(matches)")}
         if "season" not in match_columns:
             conn.execute(
-                "ALTER TABLE matches ADD COLUMN season TEXT NOT NULL DEFAULT '2026/2027'"
+                f"ALTER TABLE matches ADD COLUMN season TEXT NOT NULL DEFAULT '{CURRENT_SEASON}'"
             )
             conn.execute(
                 """INSERT OR REPLACE INTO app_metadata (key, value)
@@ -208,7 +212,7 @@ def ensure_production_database(
             season_row = conn.execute(
                 "SELECT value FROM app_metadata WHERE key = 'season'"
             ).fetchone()
-            current_season = season_row is not None and season_row["value"] == "2026/2027"
+            current_season = season_row is not None and season_row["value"] == CURRENT_SEASON
             competitions_row = conn.execute(
                 "SELECT value FROM app_metadata WHERE key = 'competitions'"
             ).fetchone()
@@ -220,7 +224,7 @@ def ensure_production_database(
                 "SELECT value FROM app_metadata WHERE key = 'matches_season_migration'"
             ).fetchone()
             current_match_season = (
-                migration_row is not None and migration_row["value"] == "2026/2027"
+                migration_row is not None and migration_row["value"] == CURRENT_SEASON
             )
             has_leagues = conn.execute("SELECT 1 FROM leagues LIMIT 1").fetchone() is not None
             has_scheduled_serie_a = (
@@ -264,10 +268,10 @@ def ensure_production_database(
                 FROM matches AS m
                 JOIN leagues AS l ON l.id = m.league_id
                 WHERE l.name IN ({placeholders})
-                  AND (m.season IS NULL OR m.season != '2026/2027')
+                  AND (m.season IS NULL OR m.season != ?)
                 LIMIT 1
                 """,
-                MANAGED_COMPETITIONS,
+                (*MANAGED_COMPETITIONS, CURRENT_SEASON),
             ).fetchone() is not None
             has_all_managed_leagues = conn.execute(
                 f"SELECT COUNT(*) AS count FROM leagues WHERE name IN ({placeholders})",

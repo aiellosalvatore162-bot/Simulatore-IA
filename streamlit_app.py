@@ -496,7 +496,7 @@ def load_competitions() -> List[Dict[str, Any]]:
 
 @st.cache_data(ttl=15, show_spinner=False)
 def load_matches(league_id: int) -> List[Dict[str, Any]]:
-    matches = database.get_matches(league_id=league_id, limit=500)
+    matches = database.get_matches(league_id=league_id, limit=5000)
     return matches if matches else []
 
 
@@ -1597,9 +1597,10 @@ def main() -> None:
     )
     render_main_navigation()
     with st.expander("Servizio database", expanded=False):
-        st.caption("Sincronizzazione esplicita della stagione 2026/2027.")
-        if st.button("Forza Sincronizzazione Database 2026/2027", key="force_sync_2026"):
-            with st.spinner("Sincronizzazione stagione 2026/2027 in corso..."):
+        season = database.CURRENT_SEASON
+        st.caption(f"Sincronizzazione esplicita della stagione {season}.")
+        if st.button(f"Forza sincronizzazione database {season}", key="force_sync"):
+            with st.spinner(f"Sincronizzazione stagione {season} in corso..."):
                 try:
                     database.ensure_production_database(force=True)
                 except (sqlite3.Error, OSError, ValueError) as exc:
@@ -1608,7 +1609,7 @@ def main() -> None:
                     load_competitions.clear()
                     load_matches.clear()
                     st.success(
-                        "Database rigenerato con il seed locale completo della stagione 2026/2027."
+                        f"Database rigenerato con il seed locale completo della stagione {season}."
                     )
 
     simulations = 100_000

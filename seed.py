@@ -22,7 +22,7 @@ from pathlib import Path
 import sqlite3
 from datetime import date, timedelta
 from typing import Optional
-from database import DB_FILE, init_db, get_db_connection
+from database import CURRENT_SEASON, DB_FILE, init_db, get_db_connection
 from updater import recalculate_league_standings
 
 
@@ -65,7 +65,8 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
         except Exception:
             pass
         cur.execute(
-            "INSERT OR REPLACE INTO app_metadata (key, value) VALUES ('season', '2026/2027')"
+            "INSERT OR REPLACE INTO app_metadata (key, value) VALUES ('season', ?)",
+            (CURRENT_SEASON,),
         )
         cur.execute(
             """INSERT OR REPLACE INTO app_metadata (key, value)
@@ -79,7 +80,8 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
         )
         cur.execute(
             """INSERT OR REPLACE INTO app_metadata (key, value)
-            VALUES ('matches_season_migration', '2026/2027')"""
+            VALUES ('matches_season_migration', ?)""",
+            (CURRENT_SEASON,),
         )
 
         # 1. LEAGUES
@@ -377,12 +379,12 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
             if h_name in team_map and a_name in team_map:
                 matches_insert.append((
                     lid, mday, mdate, team_map[h_name], team_map[a_name],
-                    status, h_goals, a_goals, h_xg, a_xg
+                    CURRENT_SEASON, status, h_goals, a_goals, h_xg, a_xg
                 ))
 
         cur.executemany("""
             INSERT INTO matches (league_id, matchday, match_date, home_team_id, away_team_id, season, status, home_goals, away_goals, home_xg, away_xg)
-            VALUES (?, ?, ?, ?, ?, '2026/2027', ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, matches_insert)
 
         cur.execute("SELECT id, league_id FROM teams")
@@ -397,9 +399,9 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
             if len(serie_a) >= 2:
                 cur.execute(
                     """INSERT INTO matches
-                    (league_id, matchday, match_date, home_id, away_id, season, status)
-                    VALUES (1, 'Giornata 1', '2026-08-23', ?, ?, '2026/2027', 'scheduled')""",
-                    (serie_a[0], serie_a[1]),
+                    (league_id, matchday, match_date, home_team_id, away_team_id, season, status)
+                    VALUES (1, 'Giornata 1', '2026-08-23', ?, ?, ?, 'scheduled')""",
+                    (serie_a[0], serie_a[1], CURRENT_SEASON),
                 )
 
         # Completa il calendario offline con un doppio girone all'italiana.
@@ -443,8 +445,8 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
                     cur.execute(
                         """INSERT INTO matches
                         (league_id, matchday, match_date, home_team_id, away_team_id, season, status)
-                        VALUES (?, ?, ?, ?, ?, '2026/2027', 'scheduled')""",
-                        (league_id, matchday, match_date, home_id, away_id),
+                        VALUES (?, ?, ?, ?, ?, ?, 'scheduled')""",
+                        (league_id, matchday, match_date, home_id, away_id, CURRENT_SEASON),
                     )
                     existing_pairs.add((league_id, home_id, away_id))
 
