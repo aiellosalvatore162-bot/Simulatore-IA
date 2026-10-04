@@ -7,6 +7,7 @@ import re
 import sqlite3
 import sys
 import unicodedata
+from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -141,9 +142,19 @@ class PasteParseError(ValueError):
         super().__init__("; ".join(issues))
 
 
+class ParsedPaste(dict):
+    """Risultati validi del parser con diagnostica non bloccante."""
+
+    issues: List[str]
+
+    def __init__(self, *args: Any, issues: Optional[List[str]] = None, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self.issues = issues or []
+
+
 def parse_team_paste(text: str) -> Dict[str, Any]:
     """Estrae campi squadra e avanzati da testo libero senza inventare valori."""
-    parsed: Dict[str, Any] = {"bookmaker_odds": {}}
+    parsed = ParsedPaste({"bookmaker_odds": {}})
     section: Optional[str] = None
     issues: List[str] = []
 
@@ -252,6 +263,14 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
 
         field = aliases.get(key)
         if field is None:
+            candidates = [
+                (alias, alias_field)
+                for alias, alias_field in aliases.items()
+                if alias in key or key in alias or SequenceMatcher(None, alias, key).ratio() >= 0.72
+            ]
+            if candidates:
+                field = max(candidates, key=lambda item: len(item[0]))[1]
+        if field is None:
             report_parser_issue(line_number, raw_line, f"etichetta non riconosciuta: {raw_key!r}")
             continue
         if field in {"home_name", "away_name"}:
@@ -284,8 +303,7 @@ def parse_team_paste(text: str) -> Dict[str, Any]:
                 parsed[f"{section}_{field}"] = number
             else:
                 parsed[field] = number
-    if issues:
-        raise PasteParseError(issues)
+    parsed.issues = issues
     return parsed
 
 
@@ -1516,30 +1534,23 @@ def render_custom_page(simulations: int, seed: int, home_advantage: float, base_
     )
     if st.button("Mappa dati incollati", key="map_custom_paste", width="stretch"):
         clear_pasted_values("custom")
-        try:
-            parsed = parse_team_paste(paste)
-        except PasteParseError as exc:
-            st.error("Parsing fallito: nessuna modifica applicata.")
-            for issue in exc.issues:
+        parsed = parse_team_paste(paste)
+        if parsed.issues:
+            st.warning("Alcune righe non sono state riconosciute; i parametri validi sono stati comunque mappati.")
+            for issue in parsed.issues:
                 st.error(issue)
-            st.session_state["custom_paste_status"] = None
-        else:
-            mapped_advanced = apply_pasted_values(parsed, "custom")
-            verified = [
-                field for field in mapped_advanced
-                if (
-                    field in {"home_momentum", "away_momentum", "home_absence_impact", "away_absence_impact",
-                              "referee_yellow_avg", "referee_red_avg", "referee_fouls_avg"}
-                    or field.endswith("_stakes")
-                )
-            ]
-            if verified:
-                st.session_state["custom_paste_status"] = (
-                    f"Parametri avanzati mappati e verificati: {', '.join(verified)}."
-                )
-            else:
-                st.session_state["custom_paste_status"] = f"Mappati {len(parsed)} campi."
-            st.rerun()
+        mapped_advanced = apply_pasted_values(parsed, "custom")
+        verified = [
+            field for field in mapped_advanced
+            if field in {"home_momentum", "away_momentum", "home_absence_impact", "away_absence_impact",
+                         "referee_yellow_avg", "referee_red_avg", "referee_fouls_avg"}
+            or field.endswith("_stakes")
+        ]
+        st.session_state["custom_paste_status"] = (
+            f"Parametri avanzati mappati e verificati: {', '.join(verified)}."
+            if verified else f"Mappati {len(parsed)} campi validi."
+        )
+        st.rerun()
     if st.session_state.get("custom_paste_status"):
         if "Parametri avanzati" in st.session_state["custom_paste_status"]:
             st.success(st.session_state["custom_paste_status"])

@@ -20,6 +20,7 @@ calibrati sulle reali gerarchie europee del 2026/2027.
 
 from pathlib import Path
 import sqlite3
+from datetime import date, timedelta
 from typing import Optional
 from database import DB_FILE, init_db, get_db_connection
 from updater import recalculate_league_standings
@@ -325,9 +326,52 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, matches_insert)
 
-        # 4. STANDINGS INIZIALI: Popoliamo la tabella con record iniziali per ciascuna squadra
         cur.execute("SELECT id, league_id FROM teams")
         all_teams = cur.fetchall()
+
+        # Completa il calendario offline con un doppio girone all'italiana.
+        # I match gia' presenti restano invariati; le giornate mancanti vengono
+        # create come scheduled con date deterministiche della stagione 2026/27.
+        existing_pairs = {
+            (row["league_id"], row["home_team_id"], row["away_team_id"])
+            for row in cur.execute("SELECT league_id, home_team_id, away_team_id FROM matches")
+        }
+        for league_id in sorted({row["league_id"] for row in all_teams} if all_teams else set()):
+            league_teams = [row for row in all_teams if row["league_id"] == league_id]
+            if len(league_teams) < 2 or len(league_teams) > 24:
+                continue
+            rotation = [row["id"] for row in league_teams]
+            if len(rotation) % 2:
+                rotation.append(None)
+            half_rounds = len(rotation) - 1
+            rounds = half_rounds * 2
+            for round_index in range(rounds):
+                half = round_index >= rounds // 2
+                leg_round = round_index % half_rounds
+                first = rotation[0]
+                rotating = rotation[1:]
+                offset = leg_round % len(rotating)
+                current = [first] + rotating[offset:] + rotating[:offset]
+                for pair_index in range(len(rotation) // 2):
+                    home_id, away_id = current[pair_index], current[-pair_index - 1]
+                    if home_id is None or away_id is None:
+                        continue
+                    if half:
+                        home_id, away_id = away_id, home_id
+                    if (league_id, home_id, away_id) in existing_pairs:
+                        continue
+                    prefix = "Giornata" if league_id in {1, 4} else "Matchday"
+                    matchday = f"{prefix} {leg_round + 1 + (half_rounds if half else 0)}"
+                    match_date = (date(2026, 8, 15) + timedelta(days=7 * round_index)).isoformat()
+                    cur.execute(
+                        """INSERT INTO matches
+                        (league_id, matchday, match_date, home_team_id, away_team_id, status)
+                        VALUES (?, ?, ?, ?, ?, 'scheduled')""",
+                        (league_id, matchday, match_date, home_id, away_id),
+                    )
+                    existing_pairs.add((league_id, home_id, away_id))
+
+        # 4. STANDINGS INIZIALI: Popoliamo la tabella con record iniziali per ciascuna squadra
         for t in all_teams:
             cur.execute("""
                 INSERT OR IGNORE INTO standings (league_id, team_id, played, won, drawn, lost, goals_for, goals_against, goal_diff, points)
