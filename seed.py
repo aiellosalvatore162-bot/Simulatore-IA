@@ -48,6 +48,18 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
             cur.execute("DELETE FROM sqlite_sequence;")
         except Exception:
             pass
+        cur.execute(
+            "INSERT OR REPLACE INTO app_metadata (key, value) VALUES ('season', '2026/2027')"
+        )
+        cur.execute(
+            """INSERT OR REPLACE INTO app_metadata (key, value)
+            VALUES ('competitions', ?)""",
+            ("|".join((
+                "Serie A", "Premier League", "Ligue 1", "La Liga",
+                "Campionato Portoghese", "Bundesliga", "Eredivisie",
+                "Champions League",
+            )),),
+        )
 
         # 1. LEAGUES
         leagues_data = [
@@ -486,9 +498,10 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
             VALUES (?, ?, ?, ?, ?)
         """, top_scorers_insert)
 
-        # 6. HEAD-TO-HEAD (H2H) STORICO PER LE RIVALITÀ E PARTITE DI CARTELLO
+        # 6. HEAD-TO-HEAD: lo snapshot di stagione non conserva dati storici.
         # (date, comp, team1, team2, hg, ag, outcome, tot_goals)
-        h2h_rivalry_data = [
+        h2h_rivalry_data = []
+        """
             # Inter vs Milan
             ("2026-04-22", "Serie A", "Milan", "Inter", 1, 2, "2", 3),
             ("2025-09-22", "Serie A", "Inter", "Milan", 1, 2, "2", 3),
@@ -572,7 +585,7 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
             ("2024-05-01", "Champions League", "Real Madrid CL", "Bayern Munich CL", 2, 2, "X", 4),
             ("2024-04-25", "Champions League", "Bayern Munich CL", "Real Madrid CL", 1, 2, "2", 3),
             ("2023-04-18", "Champions League", "Real Madrid CL", "Bayern Munich CL", 4, 2, "1", 6),
-        ]
+        """
 
         h2h_inserts = []
         covered_pairs = set()
@@ -596,13 +609,7 @@ def seed_database(db_path: Optional[str | Path] = None) -> None:
                 if pair_key not in covered_pairs:
                     covered_pairs.add(pair_key)
                     # Generiamo 5 precedenti storici coerenti
-                    historical_templates = [
-                        ("2026-03-12", 2, 1, "1"),
-                        ("2025-10-18", 1, 1, "X"),
-                        ("2025-04-08", 0, 2, "2"),
-                        ("2024-11-22", 1, 0, "1"),
-                        ("2024-02-14", 2, 2, "X")
-                    ]
+                    historical_templates = []
                     for dt, hg, ag, outc in historical_templates:
                         h2h_inserts.append((dt, "Campionato", h_id, a_id, hg, ag, outc, hg + ag))
 

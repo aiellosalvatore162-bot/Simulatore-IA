@@ -56,3 +56,21 @@ def test_sync_rebuilds_all_competitions_from_local_seed(tmp_path):
     assert len(serie_a_matches) == 380
     assert len(premier_matches) == 380
     assert len({match["matchday"] for match in serie_a_matches}) == 38
+
+
+def test_local_snapshot_covers_all_managed_competitions(tmp_path):
+    data_sync.sync_current_season(db_path=tmp_path / "all.db")
+    expected = {
+        "Serie A": 380,
+        "Premier League": 380,
+        "Ligue 1": 132,
+        "La Liga": 132,
+        "Campionato Portoghese": 56,
+        "Bundesliga": 90,
+        "Eredivisie": 56,
+        "Champions League": 56,
+    }
+    leagues = {row["name"]: row["id"] for row in database.get_all_leagues(tmp_path / "all.db")}
+    assert set(expected).issubset(leagues)
+    for name, expected_matches in expected.items():
+        assert len(database.get_matches(leagues[name], db_path=tmp_path / "all.db", limit=1000)) == expected_matches

@@ -9,6 +9,16 @@ import sqlite3
 from typing import Any, Dict, List, Optional
 
 DB_FILE = Path(__file__).resolve().parent / "data.db"
+MANAGED_COMPETITIONS = (
+    "Serie A",
+    "Premier League",
+    "Ligue 1",
+    "La Liga",
+    "Campionato Portoghese",
+    "Bundesliga",
+    "Eredivisie",
+    "Champions League",
+)
 
 
 def get_db_connection(db_path: Optional[str | Path] = None) -> sqlite3.Connection:
@@ -120,6 +130,11 @@ def init_db(db_path: Optional[str | Path] = None) -> None:
             total_goals INTEGER NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS app_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_teams_league ON teams(league_id);
         CREATE INDEX IF NOT EXISTS idx_matches_league ON matches(league_id);
         CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status);
@@ -139,7 +154,10 @@ def ensure_production_database(db_path: Optional[str | Path] = None) -> bool:
     target_path = Path(db_path or DB_FILE)
     has_leagues = False
     has_scheduled_serie_a = False
-    incomplete_domestic_calendar = True
+    incomplete_managed_calendars = True
+    current_season = False
+    current_competitions = False
+    has_all_managed_leagues = False
     try:
         init_db(target_path)
         conn = get_db_connection(target_path)
@@ -151,6 +169,17 @@ def ensure_production_database(db_path: Optional[str | Path] = None) -> bool:
                 )
             }
             required = {"leagues", "teams", "matches", "standings", "top_scorers"}
+            season_row = conn.execute(
+                "SELECT value FROM app_metadata WHERE key = 'season'"
+            ).fetchone()
+            current_season = season_row is not None and season_row["value"] == "2026/2027"
+            competitions_row = conn.execute(
+                "SELECT value FROM app_metadata WHERE key = 'competitions'"
+            ).fetchone()
+            current_competitions = (
+                competitions_row is not None
+                and competitions_row["value"] == "|".join(MANAGED_COMPETITIONS)
+            )
             has_leagues = conn.execute("SELECT 1 FROM leagues LIMIT 1").fetchone() is not None
             has_scheduled_serie_a = (
                 conn.execute(
@@ -158,19 +187,25 @@ def ensure_production_database(db_path: Optional[str | Path] = None) -> bool:
                 ).fetchone()
                 is not None
             )
-            incomplete_domestic_calendar = conn.execute(
-                """
+            placeholders = ",".join("?" for _ in MANAGED_COMPETITIONS)
+            incomplete_managed_calendars = conn.execute(
+                f"""
                 SELECT 1
                 FROM leagues AS l
                 LEFT JOIN teams AS t ON t.league_id = l.id
                 LEFT JOIN matches AS m ON m.league_id = l.id
-                WHERE l.type = 'domestic'
+                WHERE l.name IN ({placeholders})
                 GROUP BY l.id
                 HAVING COUNT(DISTINCT t.id) < 2
                     OR COUNT(DISTINCT m.id) < COUNT(DISTINCT t.id) * (COUNT(DISTINCT t.id) - 1)
                 LIMIT 1
-                """
+                """,
+                MANAGED_COMPETITIONS,
             ).fetchone() is not None
+            has_all_managed_leagues = conn.execute(
+                f"SELECT COUNT(*) AS count FROM leagues WHERE name IN ({placeholders})",
+                MANAGED_COMPETITIONS,
+            ).fetchone()["count"] == len(MANAGED_COMPETITIONS)
             if not required.issubset(tables):
                 raise sqlite3.DatabaseError("schema SQLite incompleto")
         finally:
@@ -181,7 +216,14 @@ def ensure_production_database(db_path: Optional[str | Path] = None) -> bool:
         if target_path.exists():
             target_path.unlink()
         init_db(target_path)
-    if has_leagues and has_scheduled_serie_a and not incomplete_domestic_calendar:
+    if (
+        has_leagues
+        and has_scheduled_serie_a
+        and has_all_managed_leagues
+        and not incomplete_managed_calendars
+        and current_season
+        and current_competitions
+    ):
         return False
     from seed import seed_database
     seed_database(target_path)
