@@ -1,15 +1,18 @@
 import data_sync
 import database
 
+CURRENT_SEASON = 2026
+CURRENT_SEASON_LABEL = "2026/2027"
+
 
 def test_sync_populates_complete_local_snapshot(tmp_path):
     result = data_sync.sync_current_season(
-        season=2026,
+        season=CURRENT_SEASON,
         db_path=tmp_path / "sync.db",
         competition_codes=["SA"],
     )
 
-    assert result["season"] == 2026
+    assert result["season"] == CURRENT_SEASON
     assert result["source"] == "local-seed"
     assert result["synced"][0]["source"] == "local-seed"
     assert len(database.get_matches(league_id=1, db_path=tmp_path / "sync.db", limit=1000)) == 380
@@ -25,8 +28,8 @@ def test_sync_rejects_unknown_competition(monkeypatch, tmp_path):
         raise AssertionError("La sincronizzazione deve rifiutare codici sconosciuti")
 
 
-def test_sync_rejects_previous_season(monkeypatch, tmp_path):
-    monkeypatch.setenv("FOOTBALL_DATA_SEASON", "2025")
+def test_sync_rejects_previous_season(tmp_path):
+    """Una stagione precedente deve essere rifiutata senza toccare il DB."""
     try:
         data_sync.sync_current_season(
             season=2025, db_path=tmp_path / "previous.db", competition_codes=["SA"]
@@ -39,12 +42,12 @@ def test_sync_rejects_previous_season(monkeypatch, tmp_path):
 
 def test_sync_rebuilds_all_competitions_from_local_seed(tmp_path):
     result = data_sync.sync_current_season(
-        season=2026,
+        season=CURRENT_SEASON,
         db_path=tmp_path / "offline.db",
         competition_codes=["SA", "PL"],
     )
 
-    assert result["season"] == 2026
+    assert result["season"] == CURRENT_SEASON
     assert all(item["source"] == "local-seed" for item in result["synced"])
     assert database.get_all_leagues(db_path=tmp_path / "offline.db")
     serie_a_matches = database.get_matches(
@@ -103,13 +106,17 @@ def test_startup_rebuilds_non_current_database(tmp_path):
         "SELECT value FROM app_metadata WHERE key = 'season'"
     ).fetchone()["value"]
     conn.close()
-    assert season == "2026/2027"
+    assert season == CURRENT_SEASON_LABEL
     assert not database.get_matches(
         league_id=1, db_path=db_path, limit=1000
     )[0]["matchday"].startswith("Legacy")
     assert all(
         match["match_date"] >= "2026-07-01"
         for match in database.get_matches(league_id=2, db_path=db_path, limit=1000)
+    )
+    assert all(
+        match["season"] == CURRENT_SEASON_LABEL
+        for match in database.get_matches(league_id=1, db_path=db_path, limit=1000)
     )
 
 
@@ -126,6 +133,7 @@ def test_force_database_reset_rebuilds_complete_snapshot(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM leagues").fetchone()[0] == 12
     assert conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0] == 6690
     assert conn.execute(
-        "SELECT COUNT(*) FROM matches WHERE season != '2026/2027'"
+        "SELECT COUNT(*) FROM matches WHERE season != ?",
+        (CURRENT_SEASON_LABEL,),
     ).fetchone()[0] == 0
     conn.close()
