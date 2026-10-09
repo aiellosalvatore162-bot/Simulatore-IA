@@ -1,61 +1,35 @@
-from streamlit_app import parse_team_paste
+from parser import MatchInputError, parse_match_input
 
 
-def test_parse_team_paste_accepts_case_accents_and_dash_separators():
-    parsed = parse_team_paste(
-        """
-        CASA -
-        Nome - Inter
-        Fattore-CORNERS - 1,25
-        Forma-recente - W-D-W-L-W
+VALID = """CASA: Inter
+Attacco: 1,34 | Difesa: 0.78 | Elo: 1835 | Forma: W-W-D-W-W | xG Fatti: 2.15 | xG Subiti: 0.85 | Corner pro/sub: 1.25/0.95 | Cartellini pro: 0.95
 
-        OSPITE:
-        Squadra - Milan
-        Calci d'angolo: 8
-        Fattore CARTELLINI = 1,10
-        """
-    )
+OSPITE: Milan
+Attacco: 1.22 | Difesa: 0.92 | Elo: 1765 | Forma: W-W-L-D-W | xG Fatti: 1.85 | xG Subiti: 1.10 | Corner pro/sub: 1.15/1.10 | Cartellini pro: 1.10
 
-    assert parsed["home_name"] == "Inter"
-    assert parsed["home_corners_factor"] == 1.25
-    assert parsed["home_recent_form"] == "W-D-W-L-W"
-    assert parsed["away_name"] == "Milan"
-    assert parsed["away_corners_factor"] == 8.0
-    assert parsed["away_cards_factor"] == 1.1
+ARBITRO: Gialli medi 4.5 | Falli medi 24
+"""
 
 
-def test_parse_team_paste_logs_unmatched_lines(capsys):
-    parsed = parse_team_paste(
-        """
-        CASA:
-        Etichetta inesistente: 42
-        Attacco senza valore:
-        """
-    )
-
-    captured = capsys.readouterr()
-    assert "etichetta non riconosciuta" in captured.err
-    assert "chiave o valore vuoto" in captured.err
-    assert len(parsed.issues) == 2
+def test_parser_preserves_values_and_decimal_comma():
+    match = parse_match_input(VALID)
+    assert match.home.attack == 1.34
+    assert match.away.elo == 1765.0
+    assert match.home.corners_against == 0.95
+    assert match.warnings == ()
 
 
-def test_parse_team_paste_maps_advanced_and_referee_fields():
-    parsed = parse_team_paste(
-        """
-        CASA:
-        Momentum recente: 8,5
-        Impatto assenze chiave %: 35%
-        Motivazione / obiettivo: Lotta Scudetto e qualificazione Europa
-        PROFILO ARBITRALE:
-        Gialli arbitro: 6,2
-        Rossi medi: 0,35
-        Falli arbitro: 31
-        """
-    )
+def test_parser_reports_secondary_fallbacks():
+    text = VALID.replace(" | Corner pro/sub: 1.25/0.95 | Cartellini pro: 0.95", "")
+    match = parse_match_input(text)
+    assert match.home.corners_for == 1.0
+    assert len(match.warnings) == 2
 
-    assert parsed["home_momentum"] == 8.5
-    assert parsed["home_absence_impact"] == 0.35
-    assert "Scudetto" in parsed["home_stakes"]
-    assert parsed["referee_yellow_avg"] == 6.2
-    assert parsed["referee_red_avg"] == 0.35
-    assert parsed["referee_fouls_avg"] == 31.0
+
+def test_parser_rejects_missing_required_field():
+    try:
+        parse_match_input(VALID.replace("xG Fatti: 2.15 | ", ""))
+    except MatchInputError as error:
+        assert "xG Fatti" in str(error)
+    else:
+        raise AssertionError("Missing required data must fail explicitly")
