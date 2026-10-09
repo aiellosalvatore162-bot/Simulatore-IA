@@ -33,6 +33,7 @@ st.markdown(
     .score-card .market { color: #f4f7fb; font-size: 1.05rem; font-weight: 650; margin: 6px 0 10px; }
     .score-card .prob { color: #fff; font-size: 2rem; line-height: 1; font-weight: 800; }
     .score-card .meta { color: #aebbd0; font-size: .78rem; margin-top: 10px; }
+    .score-card .confidence { color: #d6e3f5; font-size: .78rem; font-weight: 650; }
     .score-card .badge { display: inline-block; border-radius: 999px; padding: 4px 9px; margin-top: 9px; font-size: .7rem; font-weight: 750; }
     .score-card .positive { color: #b8f7d1; background: #124b38; }
     .score-card .neutral { color: #c2ccdb; background: #29374c; }
@@ -138,7 +139,7 @@ with st.container(border=True):
 
 with st.container(border=True):
     st.markdown('<div class="input-card-title">Quote e analisi valore</div>', unsafe_allow_html=True)
-    st.markdown('<div class="input-card-subtitle">Lascia a zero i mercati senza quota: saranno mostrati come solo modello.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="input-card-subtitle">Le quote nel testo vengono importate automaticamente; i campi qui sotto possono integrarle o sovrascriverle.</div>', unsafe_allow_html=True)
     odds_input = {}
     odds_cols = st.columns(4)
     for column, market in zip(odds_cols, ("1", "1X", "X2", "Over 2.5 gol")):
@@ -158,7 +159,7 @@ if st.button("Esegui simulazione", type="primary", use_container_width=True):
         else:
             parsed = MatchInput(home, away, ParsedReferee(yellow, fouls))
         config = config_from_input(parsed, simulations=int(simulations), seed=int(seed))
-        config = config.__class__(**{**config.__dict__, "odds": odds_input})
+        config = config.__class__(**{**config.__dict__, "odds": {**parsed.odds, **odds_input}})
         result = simulate_match(config)
         st.session_state["result"] = result
         st.session_state["warnings"] = parsed.warnings
@@ -171,13 +172,17 @@ if st.session_state.get("warnings"):
 def _card(
     eyebrow: str,
     label: str,
-    market: dict[str, float | int],
-    financial: dict[str, dict[str, float | bool]],
+    market: dict,
+    financial: dict,
 ) -> None:
     probability = float(market["percentage"])
+    interval = market.get("confidence_interval_95", [0.0, 0.0])
+    reliability = float(market.get("reliability_pct", 0.0))
     quote = financial.get("odds")
     implied = financial.get("implied_probability_pct")
     ev = financial.get("ev_pct")
+    stake = financial.get("recommended_stake_pct")
+    fair_odds = market.get("fair_odds")
     if quote is None:
         comparison = "Quota: non inserita"
         badge = '<span class="badge neutral">SOLO MODELLO</span>'
@@ -186,13 +191,16 @@ def _card(
         badge_class = "positive" if float(ev) > 0 else "neutral"
         badge_text = f"VALORE +{float(ev):.2f}%" if float(ev) > 0 else f"EDGE {float(ev):.2f}%"
         badge = f'<span class="badge {badge_class}">{badge_text}</span>'
+    fair_meta = f" · Quota equa {float(fair_odds):.3f}" if fair_odds is not None else ""
+    stake_meta = f" · Quarter-Kelly {float(stake):.2f}% bankroll" if stake is not None else ""
     st.markdown(
         f"""
         <div class="score-card">
           <div class="eyebrow">{eyebrow}</div>
+          <div class="confidence">Affidabilità {reliability:.2f}% · Wilson 95% [{float(interval[0]):.2f}%, {float(interval[1]):.2f}%]</div>
           <div class="market">{label}</div>
           <div class="prob">{probability:.2f}%</div>
-          <div class="meta">Score Modello · {comparison}</div>
+          <div class="meta">Score Modello · {comparison}{fair_meta}{stake_meta}</div>
           {badge}
         </div>
         """,
@@ -202,10 +210,10 @@ def _card(
 
 def _cards_section(
     title: str,
-    items: dict[str, dict[str, float | int]],
+    items: dict[str, dict],
     labels: dict[str, str],
     event_names: dict[str, str],
-    financial_rows: dict[str, dict[str, float | bool]],
+    financial_rows: dict[str, dict],
     columns: int = 3,
 ) -> None:
     st.markdown(f'<div class="section-kicker">{title}</div>', unsafe_allow_html=True)
@@ -215,7 +223,9 @@ def _cards_section(
         cols = st.columns(columns)
         for column, (key, market) in zip(cols, row):
             with column:
-                _card(title, labels.get(key, key), market, financial_rows.get(event_names.get(key, ""), {}))
+                event_name = event_names.get(key, key)
+                financial = financial_rows.get(event_name, financial_rows.get(key.replace("_", " "), {}))
+                _card(title, labels.get(key, key), market, financial)
 
 
 result = st.session_state.get("result")
@@ -231,7 +241,7 @@ if result:
     metrics[4].metric("Affidabilità campionaria", f'{summary["reliability"]["index_pct"]}%')
 
     financial_rows = {row["market"]: row for row in result["financial"]["markets"]}
-    tabs = st.tabs(["Esito", "Gol", "Goal / Multigol", "Corner", "Cartellini", "Dashboard"])
+    tabs = st.tabs(["Esito", "Gol", "Multigol / Combo", "Corner", "Cartellini", "Dashboard", "Parziali", "Squadre", "Completo"])
     with tabs[0]:
         _cards_section(
             "1X2 finale",
@@ -244,7 +254,7 @@ if result:
             "1X2 primo tempo",
             result["markets"]["first_half_1x2"],
             {"1": "Casa 1° tempo", "X": "Pareggio 1° tempo", "2": "Ospite 1° tempo"},
-            {},
+            {"1": "1 1T", "X": "X 1T", "2": "2 1T"},
             financial_rows,
         )
     with tabs[1]:
@@ -270,6 +280,20 @@ if result:
             {key: f"Multigol {key}" for key in result["markets"]["multigol"]},
             financial_rows,
         )
+        _cards_section(
+            "Multigol completo",
+            result["markets"]["multigol_complete"],
+            {key: f"Multigol totale {key}" for key in result["markets"]["multigol_complete"]},
+            {key: f"Multigol {key}" for key in result["markets"]["multigol_complete"]},
+            financial_rows,
+        )
+        _cards_section(
+            "Combo",
+            result["markets"]["combos"],
+            {key: key for key in result["markets"]["combos"]},
+            {key: key for key in result["markets"]["combos"]},
+            financial_rows,
+        )
     with tabs[3]:
         corner_labels = {key: key.replace("_", " ") for key in result["markets"]["corners"] if key != "mean"}
         _cards_section(
@@ -279,6 +303,20 @@ if result:
             {key: f"{key.replace('_', ' ')} corner" for key in corner_labels},
             financial_rows,
         )
+        _cards_section(
+            "1X2 corner",
+            result["markets"]["corner_1x2"],
+            {"1": "Più corner Casa", "X": "Parità corner", "2": "Più corner Ospite"},
+            {"1": "1 corner", "X": "X corner", "2": "2 corner"},
+            financial_rows,
+        )
+        _cards_section(
+            "Corner per squadra",
+            result["markets"]["team_corners"],
+            {key: key.replace("_", " ") for key in result["markets"]["team_corners"]},
+            {key: key.replace("_", " ") for key in result["markets"]["team_corners"]},
+            financial_rows,
+        )
     with tabs[4]:
         card_labels = {key: key.replace("_", " ") for key in result["markets"]["cards"] if key != "mean"}
         _cards_section(
@@ -286,6 +324,20 @@ if result:
             {key: value for key, value in result["markets"]["cards"].items() if key != "mean"},
             card_labels,
             {key: f"{key.replace('_', ' ')} cartellini" for key in card_labels},
+            financial_rows,
+        )
+        _cards_section(
+            "1X2 cartellini",
+            result["markets"]["card_1x2"],
+            {"1": "Più cartellini Casa", "X": "Parità cartellini", "2": "Più cartellini Ospite"},
+            {"1": "1 cartellini", "X": "X cartellini", "2": "2 cartellini"},
+            financial_rows,
+        )
+        _cards_section(
+            "Cartellini per squadra",
+            result["markets"]["team_cards"],
+            {key: key.replace("_", " ") for key in result["markets"]["team_cards"]},
+            {key: key.replace("_", " ") for key in result["markets"]["team_cards"]},
             financial_rows,
         )
     with tabs[5]:
@@ -299,11 +351,47 @@ if result:
         strength = result["dashboard"]["strength_comparison"]
         st.bar_chart(pd.DataFrame({"Casa": strength["home"], "Ospite": strength["away"]}, index=strength["labels"]))
         st.caption(summary["reliability"]["warning"])
+    with tabs[6]:
+        _cards_section("1X2 e doppia chance 1° tempo", result["markets"]["first_half_1x2"], {}, {key: f"{key} 1T" for key in ("1", "X", "2")}, financial_rows)
+        _cards_section("Doppia chance 1° tempo", result["markets"]["first_half_double_chance"], {}, {key: f"{key} 1T" for key in ("1X", "X2", "12")}, financial_rows)
+        _cards_section("1X2 e doppia chance 2° tempo", result["markets"]["second_half_1x2"], {}, {key: f"{key} 2T" for key in ("1", "X", "2")}, financial_rows)
+        _cards_section("Doppia chance 2° tempo", result["markets"]["second_half_double_chance"], {}, {key: f"{key} 2T" for key in ("1X", "X2", "12")}, financial_rows)
+        _cards_section("Draw No Bet", result["markets"]["draw_no_bet"], {"Casa": "Casa DNB", "Ospite": "Ospite DNB"}, {"Casa": "Casa DNB", "Ospite": "Ospite DNB"}, financial_rows)
+        _cards_section("Over / Under 1° tempo", result["markets"]["first_half_over_under"], {}, {key: f"{key.replace('_', ' ')} gol 1T" for key in result["markets"]["first_half_over_under"]}, financial_rows)
+        _cards_section("Goal / No Goal 1° tempo", result["markets"]["first_half_goal_no_goal"], {"Goal": "Entrambe segnano 1° tempo", "No_Goal": "No Goal 1° tempo"}, {"Goal": "Goal 1T", "No_Goal": "No Goal 1T"}, financial_rows)
+    with tabs[7]:
+        _cards_section("Goal squadra", result["markets"]["team_scoring"], {"Casa segna": "Casa segna", "Casa non segna": "Casa non segna", "Ospite segna": "Ospite segna", "Ospite non segna": "Ospite non segna"}, {}, financial_rows)
+        _cards_section("Goal squadra · Over / Under", result["markets"]["team_goals"], {key: key for key in result["markets"]["team_goals"]}, {key: key for key in result["markets"]["team_goals"]}, financial_rows)
+        _cards_section("Multigol per squadra", result["markets"]["team_multigol"], {key: key for key in result["markets"]["team_multigol"]}, {key: f"Multigol {key}" for key in result["markets"]["team_multigol"]}, financial_rows)
+        _cards_section("Somma gol esatta", result["markets"]["goal_sums"], {key: f"Somma gol {key}" for key in result["markets"]["goal_sums"]}, {key: f"Somma gol {key}" for key in result["markets"]["goal_sums"]}, financial_rows)
+        _cards_section("BTTS nei tempi", result["markets"]["both_teams"], {key: key for key in result["markets"]["both_teams"]}, {}, financial_rows)
+    with tabs[8]:
+        st.caption("Catalogo completo: ogni card usa la maschera Monte Carlo corrispondente e visualizza Wilson, affidabilità e Kelly quando è stata inserita una quota.")
+        for group_name, group in result["markets"].items():
+            if group_name in {"1x2", "first_half_1x2", "over_under", "multigol", "goal_no_goal", "corners", "cards", "combos"}:
+                continue
+            if isinstance(group, dict) and group and all(isinstance(value, dict) and "percentage" in value for value in group.values()):
+                _cards_section(group_name.replace("_", " ").title(), group, {key: key.replace("_", " ") for key in group}, {key: key.replace("_", " ") for key in group}, financial_rows)
 
     st.subheader("Schedina mista")
     st.write(result["smart_combo"]["message"])
-    if result["smart_combo"].get("recommendation"):
-        st.dataframe(pd.DataFrame([result["smart_combo"]["recommendation"]]), use_container_width=True)
+    recommendation = result["smart_combo"].get("recommendation")
+    if recommendation:
+        combo_interval = recommendation["confidence_interval_95"]
+        combo_label = " + ".join(recommendation["legs"])
+        st.markdown(
+            f"""
+            <div class="score-card">
+              <div class="eyebrow">Schedina mista · 2 leg</div>
+              <div class="confidence">Affidabilità {recommendation["reliability_pct"]:.2f}% · Wilson 95% [{combo_interval[0]:.2f}%, {combo_interval[1]:.2f}%]</div>
+              <div class="market">{combo_label}</div>
+              <div class="prob">{recommendation["simulated_probability_pct"]:.2f}%</div>
+              <div class="meta">Quota combinata {recommendation["combined_odds"]:.3f} · EV {recommendation["ev_pct"]:+.2f}% · Quarter-Kelly {recommendation["recommended_stake_pct"]:.2f}% bankroll</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.dataframe(pd.DataFrame([recommendation]), use_container_width=True)
     else:
         st.info(result["smart_combo"]["message"])
 

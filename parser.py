@@ -36,6 +36,7 @@ class MatchInput:
     home: ParsedTeam
     away: ParsedTeam
     referee: ParsedReferee
+    odds: dict[str, float] = field(default_factory=dict)
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -53,6 +54,38 @@ _REF_LINE = re.compile(
     rf"^(?P<label>Gialli\s+medi|Falli\s+medi)\s+(?P<value>{_NUMBER})\s*$",
     re.IGNORECASE,
 )
+_ODDS_LINE = re.compile(
+    rf"^Quota\s+(?P<label>.+?)\s*:\s*(?P<value>{_NUMBER})\s*$",
+    re.IGNORECASE,
+)
+
+
+def _odds_key(label: str) -> str:
+    normalized = re.sub(r"\s+", " ", label.strip())
+    aliases = {
+        "1": "1",
+        "x": "X",
+        "2": "2",
+        "1x": "1X",
+        "x2": "X2",
+        "12": "12",
+    }
+    lowered = normalized.lower()
+    if lowered in aliases:
+        return aliases[lowered]
+    normalized = re.sub(r"^over\s+", "Over ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"^under\s+", "Under ", normalized, flags=re.IGNORECASE)
+    if re.fullmatch(r"(?:Over|Under) \d+(?:[.,]\d+)?", normalized, re.IGNORECASE):
+        return f"{normalized.replace(',', '.')} gol"
+    return normalized
+
+
+def _collect_odds(item: str, section: dict[str, str], odds: dict[str, str]) -> bool:
+    match = _ODDS_LINE.match(item.strip())
+    if not match:
+        return False
+    odds[_odds_key(match.group("label"))] = match.group("value")
+    return True
 
 
 def _number(value: str, field_name: str) -> float:
@@ -63,8 +96,9 @@ def _number(value: str, field_name: str) -> float:
         raise MatchInputError(f"{field_name}: valore numerico non valido: {value!r}") from exc
 
 
-def _section_lines(text: str) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+def _section_lines(text: str) -> tuple[dict[str, str], dict[str, str], dict[str, str], dict[str, str]]:
     sections: dict[str, dict[str, str]] = {"home": {}, "away": {}, "referee": {}}
+    odds: dict[str, str] = {}
     section: Optional[str] = None
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -72,11 +106,17 @@ def _section_lines(text: str) -> tuple[dict[str, str], dict[str, str], dict[str,
             continue
         upper = line.upper()
         if upper.startswith("CASA:"):
-            sections["home"]["name"] = line.split(":", 1)[1].strip()
+            parts = [part.strip() for part in line.split("|")]
+            sections["home"]["name"] = parts[0].split(":", 1)[1].strip()
+            for item in parts[1:]:
+                _collect_odds(item, sections["home"], odds)
             section = "home"
             continue
         if upper.startswith("OSPITE:"):
-            sections["away"]["name"] = line.split(":", 1)[1].strip()
+            parts = [part.strip() for part in line.split("|")]
+            sections["away"]["name"] = parts[0].split(":", 1)[1].strip()
+            for item in parts[1:]:
+                _collect_odds(item, sections["away"], odds)
             section = "away"
             continue
         if upper.startswith("ARBITRO:"):
@@ -90,6 +130,8 @@ def _section_lines(text: str) -> tuple[dict[str, str], dict[str, str], dict[str,
             continue
         if section in ("home", "away"):
             for item in line.split("|"):
+                if _collect_odds(item, sections[section], odds):
+                    continue
                 match = _TEAM_LINE.match(item.strip())
                 if match:
                     sections[section][match.group("label").lower()] = match.group("value")
@@ -98,7 +140,7 @@ def _section_lines(text: str) -> tuple[dict[str, str], dict[str, str], dict[str,
                 match = _REF_LINE.match(item.strip())
                 if match:
                     sections["referee"][match.group("label").lower()] = match.group("value")
-    return sections["home"], sections["away"], sections["referee"]
+    return sections["home"], sections["away"], sections["referee"], odds
 
 
 def _team(section: dict[str, str], label: str, warnings: list[str]) -> ParsedTeam:
@@ -160,7 +202,7 @@ def _team(section: dict[str, str], label: str, warnings: list[str]) -> ParsedTea
 
 def parse_match_input(text: str) -> MatchInput:
     """Parse one complete match block and return explicit fallback warnings."""
-    home_section, away_section, referee_section = _section_lines(text)
+    home_section, away_section, referee_section, raw_odds = _section_lines(text)
     warnings: list[str] = []
     home = _team(home_section, "CASA", warnings)
     away = _team(away_section, "OSPITE", warnings)
@@ -178,9 +220,14 @@ def parse_match_input(text: str) -> MatchInput:
     else:
         fouls = _number(fouls_raw, "ARBITRO Falli medi")
 
+    odds: dict[str, float] = {}
+    for market, raw_value in raw_odds.items():
+        odds[market] = _number(raw_value, f"Quota {market}")
+
     return MatchInput(
         home=home,
         away=away,
         referee=ParsedReferee(yellow_avg=yellow, fouls_avg=fouls),
+        odds=odds,
         warnings=tuple(warnings),
     )

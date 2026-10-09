@@ -33,3 +33,15 @@ def test_parser_rejects_missing_required_field():
         assert "xG Fatti" in str(error)
     else:
         raise AssertionError("Missing required data must fail explicitly")
+
+
+def test_parser_reads_optional_bookmaker_quotes_from_team_headers():
+    text = VALID.replace(
+        "CASA: Inter",
+        "CASA: Inter | Quota 1: 1,85 | Quota Over 2.5: 2.10",
+    ).replace(
+        "OSPITE: Milan",
+        "OSPITE: Milan | Quota X: 3.40 | Quota 2: 4.20",
+    )
+    match = parse_match_input(text)
+    assert match.odds == {"1": 1.85, "Over 2.5 gol": 2.10, "X": 3.40, "2": 4.20}
