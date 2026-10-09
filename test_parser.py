@@ -97,3 +97,23 @@ QUOTE_COMBO:
         "Under 4.5 cartellini": 1.80,
         "1 + Over 1.5": 2.50,
     }
+
+
+def test_parser_reads_unprefixed_quotes_with_multiple_separators():
+    text = VALID.replace(
+        "ARBITRO: Gialli medi 4.5 | Falli medi 24",
+        "ARBITRO: Gialli medi 4.5 | Falli medi 24\n"
+        "Quota Multigol Totale 1-2 2.10 | Quota Multigol Casa 1-2: 1.80 | "
+        "Quota Somma Gol 0 - 4.00 | Quota Over 8.5 Corner 1.90 | "
+        "Quota 1 + Over 1.5 2.50\n"
+        "Over 2.5 - 2.10 | DNB Casa 1.70",
+    )
+    match = parse_match_input(text)
+
+    assert match.odds["Multigol 1-2"] == 2.10
+    assert match.odds["Multigol Casa 1-2"] == 1.80
+    assert match.odds["Somma gol 0"] == 4.00
+    assert match.odds["Over 8.5 corner"] == 1.90
+    assert match.odds["1 + Over 1.5"] == 2.50
+    assert match.odds["Over 2.5 gol"] == 2.10
+    assert match.odds["Casa DNB"] == 1.70

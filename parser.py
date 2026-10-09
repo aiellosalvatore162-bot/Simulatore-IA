@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 import re
 from typing import Optional
 
-from market_catalog import definition_for_event, normalize_market_label
+from market_catalog import definition_for_event, event_keys, normalize_market_label
 
 @dataclass(frozen=True)
 class ParsedTeam:
@@ -56,7 +56,7 @@ _REF_LINE = re.compile(
     re.IGNORECASE,
 )
 _ODDS_LINE = re.compile(
-    rf"^(?:Quota\s+)?(?P<label>.+?)\s*:\s*(?P<value>{_NUMBER})\s*$",
+    rf"^(?:Quota\s+)?(?P<label>.+?)(?:\s*:\s*|\s+[-–—]\s+|\s+)(?P<value>{_NUMBER})\s*$",
     re.IGNORECASE,
 )
 _MATCH_HEADER = re.compile(r"(?P<label>CASA|OSPITE|ARBITRO)\s*:", re.IGNORECASE)
@@ -69,23 +69,28 @@ _QUOTE_SECTION = re.compile(
 def _normalize_quote_label(label: str) -> str:
     normalized = re.sub(r"\s+", " ", label.strip().replace("_", " "))
     normalized = re.sub(r"^quota\s+", "", normalized, flags=re.IGNORECASE)
-    aliases = {
-        "DNB Casa": "Casa DNB",
-        "DNB Ospite": "Ospite DNB",
-        "Casa DNB": "Casa DNB",
-        "Ospite DNB": "Ospite DNB",
-    }
-    if normalized.casefold() in {key.casefold() for key in aliases}:
-        return next(value for key, value in aliases.items() if key.casefold() == normalized.casefold())
+    normalized = re.sub(r"\bcorner\b", "corner", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bcartellini\b", "cartellini", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bgol\b", "gol", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"^DNB\s+(Casa|Ospite)$", r"\1 DNB", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"^Multigol\s+(?:Totale|Totali)\s+", "Multigol ", normalized, flags=re.IGNORECASE)
-    return normalize_market_label(normalized)
+    normalized = normalize_market_label(normalized)
+    for event_key in event_keys():
+        if event_key.casefold() == normalized.casefold():
+            return event_key
+    return normalized
 
 
 def _collect_odds(item: str, *, allow_unprefixed: bool = False) -> tuple[str, str] | None:
     match = _ODDS_LINE.match(item.strip())
-    if not match or (not allow_unprefixed and not item.strip().lower().startswith("quota ")):
+    if not match:
         return None
+    explicit = item.strip().lower().startswith("quota ")
     key = _normalize_quote_label(match.group("label"))
+    if not explicit and not allow_unprefixed:
+        return None
+    if not explicit and key not in event_keys():
+        return None
     return key, match.group("value")
 
 
@@ -116,6 +121,10 @@ def _section_lines(text: str) -> tuple[dict[str, str], dict[str, str], dict[str,
                     sections[current_section][match.group("label").lower()] = match.group("value")
         elif current_section == "referee":
             for item in content.split("|"):
+                quote = _collect_odds(item, allow_unprefixed=allow_unprefixed_odds)
+                if quote:
+                    odds.append(quote)
+                    continue
                 match = _REF_LINE.match(item.strip())
                 if match:
                     sections["referee"][match.group("label").lower()] = match.group("value")
@@ -137,6 +146,8 @@ def _section_lines(text: str) -> tuple[dict[str, str], dict[str, str], dict[str,
             process_content(line, None, allow_unprefixed_odds=True)
             continue
         headers = list(_MATCH_HEADER.finditer(line))
+        if headers and headers[0].start() != 0:
+            headers = []
         if headers:
             quote_section = False
             for index, header in enumerate(headers):
@@ -149,7 +160,7 @@ def _section_lines(text: str) -> tuple[dict[str, str], dict[str, str], dict[str,
                         sections[section]["name"] = name
                 process_content(content, section, allow_unprefixed_odds=False)
             continue
-        process_content(line, section, allow_unprefixed_odds=quote_section)
+        process_content(line, section, allow_unprefixed_odds=True)
     return sections["home"], sections["away"], sections["referee"], odds
 
 
