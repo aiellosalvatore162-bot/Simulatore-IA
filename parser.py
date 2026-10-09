@@ -56,16 +56,36 @@ _REF_LINE = re.compile(
     re.IGNORECASE,
 )
 _ODDS_LINE = re.compile(
-    rf"^Quota\s+(?P<label>.+?)\s*:\s*(?P<value>{_NUMBER})\s*$",
+    rf"^(?:Quota\s+)?(?P<label>.+?)\s*:\s*(?P<value>{_NUMBER})\s*$",
     re.IGNORECASE,
 )
+_MATCH_HEADER = re.compile(r"(?P<label>CASA|OSPITE|ARBITRO)\s*:", re.IGNORECASE)
+_QUOTE_SECTION = re.compile(
+    r"^\s*(?:#+\s*)?(?:QUOTE_MERCATI_PRINCIPALI|"
+    r"QUOTE_MULTIGOL_TOTALI_E_SQUADRA|QUOTE_SOMMA_GOL|"
+    r"QUOTE_CORNER_E_CARTELLINI|QUOTE_COMBO)\s*:?\s*$",
+    re.IGNORECASE,
+)
+def _normalize_quote_label(label: str) -> str:
+    normalized = re.sub(r"\s+", " ", label.strip().replace("_", " "))
+    normalized = re.sub(r"^quota\s+", "", normalized, flags=re.IGNORECASE)
+    aliases = {
+        "DNB Casa": "Casa DNB",
+        "DNB Ospite": "Ospite DNB",
+        "Casa DNB": "Casa DNB",
+        "Ospite DNB": "Ospite DNB",
+    }
+    if normalized.casefold() in {key.casefold() for key in aliases}:
+        return next(value for key, value in aliases.items() if key.casefold() == normalized.casefold())
+    normalized = re.sub(r"^Multigol\s+(?:Totale|Totali)\s+", "Multigol ", normalized, flags=re.IGNORECASE)
+    return normalize_market_label(normalized)
 
 
-def _collect_odds(item: str) -> tuple[str, str] | None:
+def _collect_odds(item: str, *, allow_unprefixed: bool = False) -> tuple[str, str] | None:
     match = _ODDS_LINE.match(item.strip())
-    if not match:
+    if not match or (not allow_unprefixed and not item.strip().lower().startswith("quota ")):
         return None
-    key = normalize_market_label(match.group("label"))
+    key = _normalize_quote_label(match.group("label"))
     return key, match.group("value")
 
 
@@ -81,52 +101,55 @@ def _section_lines(text: str) -> tuple[dict[str, str], dict[str, str], dict[str,
     sections: dict[str, dict[str, str]] = {"home": {}, "away": {}, "referee": {}}
     odds: list[tuple[str, str]] = []
     section: Optional[str] = None
+    quote_section = False
+
+    def process_content(content: str, current_section: Optional[str], *, allow_unprefixed_odds: bool) -> None:
+        if current_section in ("home", "away"):
+            parts = [part.strip() for part in content.split("|")]
+            for item in parts:
+                quote = _collect_odds(item, allow_unprefixed=allow_unprefixed_odds)
+                if quote:
+                    odds.append(quote)
+                    continue
+                match = _TEAM_LINE.match(item)
+                if match:
+                    sections[current_section][match.group("label").lower()] = match.group("value")
+        elif current_section == "referee":
+            for item in content.split("|"):
+                match = _REF_LINE.match(item.strip())
+                if match:
+                    sections["referee"][match.group("label").lower()] = match.group("value")
+        elif allow_unprefixed_odds:
+            for item in content.split("|"):
+                quote = _collect_odds(item, allow_unprefixed=True)
+                if quote:
+                    odds.append(quote)
+
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
             continue
-        upper = line.upper()
-        if upper.startswith("CASA:"):
-            parts = [part.strip() for part in line.split("|")]
-            sections["home"]["name"] = parts[0].split(":", 1)[1].strip()
-            for item in parts[1:]:
-                quote = _collect_odds(item)
-                if quote:
-                    odds.append(quote)
-            section = "home"
+        if _QUOTE_SECTION.match(line):
+            quote_section = True
+            section = None
             continue
-        if upper.startswith("OSPITE:"):
-            parts = [part.strip() for part in line.split("|")]
-            sections["away"]["name"] = parts[0].split(":", 1)[1].strip()
-            for item in parts[1:]:
-                quote = _collect_odds(item)
-                if quote:
-                    odds.append(quote)
-            section = "away"
+        if quote_section and not re.match(r"^(?:CASA|OSPITE|ARBITRO)\s*:", line, re.IGNORECASE):
+            process_content(line, None, allow_unprefixed_odds=True)
             continue
-        if upper.startswith("ARBITRO:"):
-            section = "referee"
-            remainder = line.split(":", 1)[1].strip()
-            if remainder:
-                for item in remainder.split("|"):
-                    match = _REF_LINE.match(item.strip())
-                    if match:
-                        sections["referee"][match.group("label").lower()] = match.group("value")
+        headers = list(_MATCH_HEADER.finditer(line))
+        if headers:
+            quote_section = False
+            for index, header in enumerate(headers):
+                content_end = headers[index + 1].start() if index + 1 < len(headers) else len(line)
+                content = line[header.end():content_end].strip(" |")
+                section = {"casa": "home", "ospite": "away", "arbitro": "referee"}[header.group("label").lower()]
+                if section in ("home", "away"):
+                    name = content.split("|", 1)[0].strip()
+                    if name and "name" not in sections[section]:
+                        sections[section]["name"] = name
+                process_content(content, section, allow_unprefixed_odds=False)
             continue
-        if section in ("home", "away"):
-            for item in line.split("|"):
-                quote = _collect_odds(item)
-                if quote:
-                    odds.append(quote)
-                    continue
-                match = _TEAM_LINE.match(item.strip())
-                if match:
-                    sections[section][match.group("label").lower()] = match.group("value")
-        elif section == "referee":
-            for item in line.split("|"):
-                match = _REF_LINE.match(item.strip())
-                if match:
-                    sections["referee"][match.group("label").lower()] = match.group("value")
+        process_content(line, section, allow_unprefixed_odds=quote_section)
     return sections["home"], sections["away"], sections["referee"], odds
 
 

@@ -136,7 +136,7 @@ try:
 except MatchInputError as exc:
     parse_error = str(exc)
 
-with st.expander("🔍 Diagnostica Input & Quote Lette", expanded=True):
+with st.expander("🔍 Diagnostica Parser & Quote", expanded=True):
     if parsed_preview is None:
         st.error(f"Parser non pronto: {parse_error}")
         st.caption("Completa i campi obbligatori per visualizzare i dati estratti.")
@@ -203,7 +203,7 @@ with st.container(border=True):
     st.markdown('<div class="input-card-subtitle">Controlla precisione e riproducibilità del calcolo.</div>', unsafe_allow_html=True)
     col1, col2 = st.columns(2)
     with col1:
-        simulations = st.number_input("Simulazioni Monte Carlo", min_value=1_000, max_value=200_000, value=50_000, step=1_000)
+        simulations = st.number_input("Simulazioni Monte Carlo", min_value=1_000, max_value=200_000, value=100000, step=1_000)
     with col2:
         seed = st.number_input("Seed riproducibile", min_value=0, value=42, step=1)
 

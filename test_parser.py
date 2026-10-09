@@ -57,3 +57,43 @@ def test_parser_rejects_invalid_duplicate_and_unknown_quotes_with_warnings():
     assert any("duplicata" in warning for warning in match.warnings)
     assert any("non supportato" in warning for warning in match.warnings)
     assert any("maggiore di 1.0" in warning for warning in match.warnings)
+
+
+def test_parser_isolates_repeated_team_headers_and_reads_quote_sections():
+    text = VALID.replace("CASA: Inter", "CASA: InterCASA: Genoa").replace(
+        "ARBITRO: Gialli medi 4.5 | Falli medi 24",
+        """ARBITRO: Gialli medi 4.5 | Falli medi 24
+
+QUOTE_MERCATI_PRINCIPALI:
+Quota 1: 1.85 | DNB Casa: 1.70 | Over 2.5: 2.10
+
+QUOTE_MULTIGOL_TOTALI_E_SQUADRA:
+Multigol Totale 1-3: 1.55 | Multigol Casa 1-2: 1.80 | Multigol Ospite 1-2: 1.90
+
+QUOTE_SOMMA_GOL:
+Somma gol 0: 4.00 | Somma gol 5+: 8.00
+
+QUOTE_CORNER_E_CARTELLINI:
+Over 8.5 corner: 1.90 | 1 corner: 2.00 | Under 4.5 cartellini: 1.80
+
+QUOTE_COMBO:
+1 + Over 1.5: 2.50""",
+    )
+    match = parse_match_input(text)
+
+    assert match.home.name == "Inter"
+    assert match.away.name == "Milan"
+    assert match.odds == {
+        "1": 1.85,
+        "Casa DNB": 1.70,
+        "Over 2.5 gol": 2.10,
+        "Multigol 1-3": 1.55,
+        "Multigol Casa 1-2": 1.80,
+        "Multigol Ospite 1-2": 1.90,
+        "Somma gol 0": 4.00,
+        "Somma gol 5+": 8.00,
+        "Over 8.5 corner": 1.90,
+        "1 corner": 2.00,
+        "Under 4.5 cartellini": 1.80,
+        "1 + Over 1.5": 2.50,
+    }
