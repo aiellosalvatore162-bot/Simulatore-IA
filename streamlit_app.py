@@ -37,6 +37,17 @@ st.markdown(
     .score-card .positive { color: #b8f7d1; background: #124b38; }
     .score-card .neutral { color: #c2ccdb; background: #29374c; }
     .section-kicker { color: #6f83a2; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; font-size: .78rem; margin: 18px 0 8px; }
+    .input-card-title { color: #f4f7fb; font-size: 1.15rem; font-weight: 750; margin-bottom: 2px; }
+    .input-card-subtitle { color: #93a4bf; font-size: .82rem; margin-bottom: 12px; }
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        border-color: #2b3b55;
+        border-radius: 16px;
+        background: linear-gradient(145deg, rgba(23,34,53,.78), rgba(16,24,39,.78));
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"] > div { padding: 0.85rem 1rem; }
+    div[data-testid="stRadio"] label, div[data-testid="stNumberInput"] label,
+    div[data-testid="stSlider"] label, div[data-testid="stTextInput"] label,
+    div[data-testid="stTextArea"] label { color: #c7d3e5; font-weight: 600; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -44,16 +55,44 @@ st.markdown(
 st.title("Motore on-demand")
 st.caption("Dashboard analitica senza calendario o database: input dichiarato, calcolo riproducibile e quote opzionali.")
 
-input_mode = st.radio("Modalità input", ["Copia-incolla", "Crea partita"], horizontal=True)
+if "input_text" not in st.session_state:
+    st.session_state["input_text"] = EXAMPLE
+
+def _team_block(team: ParsedTeam, label: str) -> str:
+    return (
+        f"{label.upper()}: {team.name}\n"
+        f"Attacco: {team.attack:.2f} | Difesa: {team.defense:.2f} | Elo: {int(team.elo)} | "
+        f"Forma: {team.form} | xG Fatti: {team.xg_for:.2f} | xG Subiti: {team.xg_against:.2f} | "
+        f"Corner pro/sub: {team.corners_for:.2f}/{team.corners_against:.2f} | "
+        f"Cartellini pro: {team.cards_for:.2f}"
+    )
+
+
+with st.container(border=True):
+    st.markdown('<div class="input-card-title">Configurazione partita</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="input-card-subtitle">Scegli il flusso più rapido: incolla i dati oppure costruisci la partita campo per campo.</div>',
+        unsafe_allow_html=True,
+    )
+    input_mode = st.radio("Modalità input", ["Copia-incolla", "Crea partita"], horizontal=True, key="input_mode")
 if input_mode == "Copia-incolla":
-    text = st.text_area("Incolla i dati della partita", value=EXAMPLE, height=260)
+    with st.container(border=True):
+        st.markdown('<div class="input-card-title">Input dichiarato</div>', unsafe_allow_html=True)
+        st.markdown('<div class="input-card-subtitle">Il testo viene passato al parser senza dati esterni o valori nascosti.</div>', unsafe_allow_html=True)
+        text = st.text_area(
+            "Blocco CASA / OSPITE / ARBITRO",
+            key="input_text",
+            height=260,
+            help="Usa il formato documentato: i campi obbligatori sono nome, attacco, difesa, Elo, forma e xG.",
+        )
 else:
-    st.info("I campi guidati costruiscono lo stesso contratto usato dal parser.")
-    home_col, away_col = st.columns(2)
+    st.markdown('<div class="section-kicker">Builder guidato</div>', unsafe_allow_html=True)
+    home_col, away_col = st.columns(2, gap="medium")
 
     def guided_team(label: str, key: str, defaults: tuple) -> ParsedTeam:
-        with (home_col if key == "home" else away_col):
-            st.subheader(label)
+        with (home_col if key == "home" else away_col), st.container(border=True):
+            st.markdown(f'<div class="input-card-title">⚽ {label}</div>', unsafe_allow_html=True)
+            st.markdown('<div class="input-card-subtitle">Parametri di forza e produzione</div>', unsafe_allow_html=True)
             name = st.text_input("Nome", defaults[0], key=f"{key}_name")
             attack = st.slider("Attacco", 0.2, 3.0, defaults[1], 0.01, key=f"{key}_attack")
             defense = st.slider("Difesa", 0.2, 3.0, defaults[2], 0.01, key=f"{key}_defense")
@@ -68,30 +107,49 @@ else:
 
     home = guided_team("Casa", "home", ("Inter", 1.34, 0.78, 1835, "W-W-D-W-W", 2.15, 0.85, 1.25, 0.95, 0.95))
     away = guided_team("Ospite", "away", ("Milan", 1.22, 0.92, 1765, "W-W-L-D-W", 1.85, 1.10, 1.15, 1.10, 1.10))
-    ref_col1, ref_col2 = st.columns(2)
-    yellow = ref_col1.number_input("Gialli medi", 0.0, 15.0, 4.5, 0.1)
-    fouls = ref_col2.number_input("Falli medi", 0.0, 60.0, 24.0, 0.5)
-    text = ""
+    with st.container(border=True):
+        st.markdown('<div class="input-card-title">🟨 Profilo arbitrale</div>', unsafe_allow_html=True)
+        st.markdown('<div class="input-card-subtitle">Impatto disciplinare medio usato nel modello.</div>', unsafe_allow_html=True)
+        ref_col1, ref_col2 = st.columns(2)
+        yellow = ref_col1.number_input("Gialli medi", 0.0, 15.0, 4.5, 0.1, key="guided_yellow")
+        fouls = ref_col2.number_input("Falli medi", 0.0, 60.0, 24.0, 0.5, key="guided_fouls")
+    generated_text = (
+        f"{_team_block(home, 'Casa')}\n\n{_team_block(away, 'Ospite')}\n\n"
+        f"ARBITRO: Gialli medi {yellow:.1f} | Falli medi {fouls:.1f}"
+    )
+    with st.container(border=True):
+        st.markdown('<div class="input-card-title">Anteprima input motore</div>', unsafe_allow_html=True)
+        st.markdown('<div class="input-card-subtitle">Aggiornata automaticamente a ogni modifica dei campi.</div>', unsafe_allow_html=True)
+        st.code(generated_text, language="text")
+        if st.button("Usa questo blocco nel copia-incolla", use_container_width=True, key="use_generated_input"):
+            st.session_state["input_text"] = generated_text
+            st.session_state["input_mode"] = "Copia-incolla"
+            st.rerun()
+    text = generated_text
 
-col1, col2 = st.columns(2)
-with col1:
-    simulations = st.number_input("Simulazioni Monte Carlo", min_value=1_000, max_value=200_000, value=50_000, step=1_000)
-with col2:
-    seed = st.number_input("Seed riproducibile", min_value=0, value=42, step=1)
+with st.container(border=True):
+    st.markdown('<div class="input-card-title">Parametri simulazione</div>', unsafe_allow_html=True)
+    st.markdown('<div class="input-card-subtitle">Controlla precisione e riproducibilità del calcolo.</div>', unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        simulations = st.number_input("Simulazioni Monte Carlo", min_value=1_000, max_value=200_000, value=50_000, step=1_000)
+    with col2:
+        seed = st.number_input("Seed riproducibile", min_value=0, value=42, step=1)
 
-st.subheader("Quote opzionali e analisi valore")
-st.caption("Inserisci solo quote decimali. I mercati senza quota non vengono valutati finanziariamente.")
-odds_input = {}
-odds_cols = st.columns(4)
-for column, market in zip(odds_cols, ("1", "1X", "X2", "Over 2.5 gol")):
-    value = column.number_input(market, min_value=0.0, value=0.0, step=0.01, key=f"odd_{market}")
-    if value > 1.0:
-        odds_input[market] = value
-extra_cols = st.columns(4)
-for column, market in zip(extra_cols, ("Under 2.5 gol", "Multigol 2-4", "Over 8.5 corner", "Over 4.5 cartellini")):
-    value = column.number_input(market, min_value=0.0, value=0.0, step=0.01, key=f"odd_{market}")
-    if value > 1.0:
-        odds_input[market] = value
+with st.container(border=True):
+    st.markdown('<div class="input-card-title">Quote e analisi valore</div>', unsafe_allow_html=True)
+    st.markdown('<div class="input-card-subtitle">Lascia a zero i mercati senza quota: saranno mostrati come solo modello.</div>', unsafe_allow_html=True)
+    odds_input = {}
+    odds_cols = st.columns(4)
+    for column, market in zip(odds_cols, ("1", "1X", "X2", "Over 2.5 gol")):
+        value = column.number_input(market, min_value=0.0, value=0.0, step=0.01, key=f"odd_{market}")
+        if value > 1.0:
+            odds_input[market] = value
+    extra_cols = st.columns(4)
+    for column, market in zip(extra_cols, ("Under 2.5 gol", "Multigol 2-4", "Over 8.5 corner", "Over 4.5 cartellini")):
+        value = column.number_input(market, min_value=0.0, value=0.0, step=0.01, key=f"odd_{market}")
+        if value > 1.0:
+            odds_input[market] = value
 
 if st.button("Esegui simulazione", type="primary", use_container_width=True):
     try:
