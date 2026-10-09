@@ -5,7 +5,7 @@ import streamlit as st
 
 from engine import config_from_input, simulate_match
 from market_catalog import MARKET_GROUPS, definitions_for_group
-from parser import MatchInputError, MatchInput, ParsedReferee, ParsedTeam, parse_match_input
+from parser import MatchInputError, MatchInput, ParsedTeam, parse_match_input
 
 
 EXAMPLE = """CASA: Inter
@@ -129,6 +129,75 @@ else:
             st.rerun()
     text = generated_text
 
+parsed_preview: MatchInput | None = None
+parse_error: str | None = None
+try:
+    parsed_preview = parse_match_input(text)
+except MatchInputError as exc:
+    parse_error = str(exc)
+
+with st.expander("🔍 Diagnostica Input & Quote Lette", expanded=True):
+    if parsed_preview is None:
+        st.error(f"Parser non pronto: {parse_error}")
+        st.caption("Completa i campi obbligatori per visualizzare i dati estratti.")
+    else:
+        st.caption("Anteprima live del risultato del parser sul blocco attualmente in input.")
+        team_columns = st.columns(2)
+        for column, label, team in (
+            (team_columns[0], "Casa", parsed_preview.home),
+            (team_columns[1], "Ospite", parsed_preview.away),
+        ):
+            with column:
+                st.markdown(f"**{label}: {team.name}**")
+                st.dataframe(
+                    pd.DataFrame(
+                        {
+                            "Campo": ["Elo", "xG fatti", "xG subiti", "Forma", "Attacco", "Difesa", "Corner pro/sub", "Cartellini pro"],
+                            "Valore": [
+                                team.elo,
+                                team.xg_for,
+                                team.xg_against,
+                                team.form,
+                                team.attack,
+                                team.defense,
+                                f"{team.corners_for:.2f} / {team.corners_against:.2f}",
+                                team.cards_for,
+                            ],
+                        }
+                    ),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+        referee_col, odds_col = st.columns(2)
+        with referee_col:
+            st.markdown("**Arbitro**")
+            st.dataframe(
+                pd.DataFrame(
+                    {
+                        "Campo": ["Gialli medi", "Falli medi"],
+                        "Valore": [parsed_preview.referee.yellow_avg, parsed_preview.referee.fouls_avg],
+                    }
+                ),
+                hide_index=True,
+                use_container_width=True,
+            )
+        with odds_col:
+            st.markdown(f"**Quote valide lette ({len(parsed_preview.odds)})**")
+            if parsed_preview.odds:
+                st.dataframe(
+                    pd.DataFrame(
+                        [{"Chiave": key, "Quota": value} for key, value in parsed_preview.odds.items()]
+                    ),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+            else:
+                st.info("Nessuna quota valida nel testo.")
+        if parsed_preview.warnings:
+            st.warning("Warning e fallback: " + " · ".join(parsed_preview.warnings))
+        else:
+            st.success("Nessun warning: tutti i campi letti sono validi.")
+
 with st.container(border=True):
     st.markdown('<div class="input-card-title">Parametri simulazione</div>', unsafe_allow_html=True)
     st.markdown('<div class="input-card-subtitle">Controlla precisione e riproducibilità del calcolo.</div>', unsafe_allow_html=True)
@@ -140,25 +209,51 @@ with st.container(border=True):
 
 with st.container(border=True):
     st.markdown('<div class="input-card-title">Quote e analisi valore</div>', unsafe_allow_html=True)
-    st.markdown('<div class="input-card-subtitle">Le quote nel testo vengono importate automaticamente; i campi qui sotto possono integrarle o sovrascriverle.</div>', unsafe_allow_html=True)
-    odds_input = {}
-    odds_cols = st.columns(4)
-    for column, market in zip(odds_cols, ("1", "1X", "X2", "Over 2.5 gol")):
-        value = column.number_input(market, min_value=0.0, value=0.0, step=0.01, key=f"odd_{market}")
-        if value > 1.0:
-            odds_input[market] = value
-    extra_cols = st.columns(4)
-    for column, market in zip(extra_cols, ("Under 2.5 gol", "Multigol 2-4", "Over 8.5 corner", "Over 4.5 cartellini")):
-        value = column.number_input(market, min_value=0.0, value=0.0, step=0.01, key=f"odd_{market}")
-        if value > 1.0:
-            odds_input[market] = value
+    st.markdown(
+        '<div class="input-card-subtitle">Il testo viene importato automaticamente. '
+        'Ogni campo valorizzato qui sotto sovrascrive la quota letta; lascia 0 per non inserirla.</div>',
+        unsafe_allow_html=True,
+    )
+    quote_source = parsed_preview.odds if parsed_preview else {}
+    quote_editor_token = str(abs(hash(text)))
+    quote_categories = {
+        "Esiti": ("1x2", "double_chance", "draw_no_bet", "first_half_1x2", "first_half_double_chance", "second_half_1x2", "second_half_double_chance"),
+        "Goal": ("goal_no_goal", "first_half_goal_no_goal", "over_under", "first_half_over_under", "team_goals", "team_scoring"),
+        "Multigol e somme": ("multigol_complete", "team_multigol", "goal_sums"),
+        "Corner": ("corners", "corner_1x2", "team_corners"),
+        "Cartellini": ("cards", "card_1x2", "team_cards"),
+        "Combo": ("combos", "both_teams"),
+    }
+    odds_input: dict[str, float] = {}
+    quote_tabs = st.tabs(list(quote_categories))
+    for tab, groups in zip(quote_tabs, quote_categories.values()):
+        with tab:
+            for group in groups:
+                definitions = definitions_for_group(group)
+                if not definitions:
+                    continue
+                with st.expander(group.replace("_", " ").title(), expanded=group in {"1x2", "over_under"}):
+                    for start in range(0, len(definitions), 3):
+                        columns = st.columns(3)
+                        for column, definition in zip(columns, definitions[start:start + 3]):
+                            current = float(quote_source.get(definition.event_key, 0.0))
+                            value = column.number_input(
+                                definition.label,
+                                min_value=0.0,
+                                value=current,
+                                step=0.01,
+                                format="%.2f",
+                                key=f"odd_{quote_editor_token}_{definition.key}",
+                                help=f"Chiave motore: {definition.event_key}",
+                            )
+                            if value > 1.0:
+                                odds_input[definition.event_key] = float(value)
 
 if st.button("Esegui simulazione", type="primary", use_container_width=True):
     try:
-        if input_mode == "Copia-incolla":
-            parsed = parse_match_input(text)
-        else:
-            parsed = MatchInput(home, away, ParsedReferee(yellow, fouls))
+        if parsed_preview is None:
+            raise MatchInputError(parse_error or "Input non valido")
+        parsed = parsed_preview
         config = config_from_input(parsed, simulations=int(simulations), seed=int(seed))
         config = config.__class__(**{**config.__dict__, "odds": {**parsed.odds, **odds_input}})
         result = simulate_match(config)
