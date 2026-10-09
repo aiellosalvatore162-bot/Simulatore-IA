@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from engine import config_from_input, simulate_match
+from market_catalog import MARKET_GROUPS, definitions_for_group
 from parser import MatchInputError, MatchInput, ParsedReferee, ParsedTeam, parse_match_input
 
 
@@ -182,6 +183,7 @@ def _card(
     implied = financial.get("implied_probability_pct")
     ev = financial.get("ev_pct")
     stake = financial.get("recommended_stake_pct")
+    push = financial.get("push_probability_pct")
     fair_odds = market.get("fair_odds")
     if quote is None:
         comparison = "Quota: non inserita"
@@ -192,6 +194,7 @@ def _card(
         badge_text = f"VALORE +{float(ev):.2f}%" if float(ev) > 0 else f"EDGE {float(ev):.2f}%"
         badge = f'<span class="badge {badge_class}">{badge_text}</span>'
     fair_meta = f" · Quota equa {float(fair_odds):.3f}" if fair_odds is not None else ""
+    push_meta = f" · Push {float(push):.2f}%" if push is not None and float(push) > 0 else ""
     stake_meta = f" · Quarter-Kelly {float(stake):.2f}% bankroll" if stake is not None else ""
     st.markdown(
         f"""
@@ -200,7 +203,7 @@ def _card(
           <div class="confidence">Affidabilità {reliability:.2f}% · Wilson 95% [{float(interval[0]):.2f}%, {float(interval[1]):.2f}%]</div>
           <div class="market">{label}</div>
           <div class="prob">{probability:.2f}%</div>
-          <div class="meta">Score Modello · {comparison}{fair_meta}{stake_meta}</div>
+          <div class="meta">Score Modello · {comparison}{fair_meta}{push_meta}{stake_meta}</div>
           {badge}
         </div>
         """,
@@ -226,6 +229,24 @@ def _cards_section(
                 event_name = event_names.get(key, key)
                 financial = financial_rows.get(event_name, financial_rows.get(key.replace("_", " "), {}))
                 _card(title, labels.get(key, key), market, financial)
+
+
+def _catalog_cards_section(group: str, result: dict, financial_rows: dict) -> None:
+    definitions = definitions_for_group(group)
+    catalog_group = result["markets"]["catalog"].get(group, {})
+    entries = [
+        (definition, catalog_group[definition.key])
+        for definition in definitions
+        if definition.key in catalog_group
+    ]
+    if not entries:
+        return
+    st.markdown(f'<div class="section-kicker">{group.replace("_", " ").title()}</div>', unsafe_allow_html=True)
+    for start in range(0, len(entries), 3):
+        cols = st.columns(3)
+        for column, (definition, market) in zip(cols, entries[start:start + 3]):
+            with column:
+                _card(group, definition.label, market, financial_rows.get(definition.event_key, {}))
 
 
 result = st.session_state.get("result")
@@ -351,6 +372,7 @@ if result:
         strength = result["dashboard"]["strength_comparison"]
         st.bar_chart(pd.DataFrame({"Casa": strength["home"], "Ospite": strength["away"]}, index=strength["labels"]))
         st.caption(summary["reliability"]["warning"])
+        st.info(f"Stabilità campionaria Wilson: {summary['reliability']['sampling_stability_pct']:.2f}%. Incertezza di modello: {summary['reliability']['model_uncertainty']}")
     with tabs[6]:
         _cards_section("1X2 e doppia chance 1° tempo", result["markets"]["first_half_1x2"], {}, {key: f"{key} 1T" for key in ("1", "X", "2")}, financial_rows)
         _cards_section("Doppia chance 1° tempo", result["markets"]["first_half_double_chance"], {}, {key: f"{key} 1T" for key in ("1X", "X2", "12")}, financial_rows)
@@ -366,12 +388,9 @@ if result:
         _cards_section("Somma gol esatta", result["markets"]["goal_sums"], {key: f"Somma gol {key}" for key in result["markets"]["goal_sums"]}, {key: f"Somma gol {key}" for key in result["markets"]["goal_sums"]}, financial_rows)
         _cards_section("BTTS nei tempi", result["markets"]["both_teams"], {key: key for key in result["markets"]["both_teams"]}, {}, financial_rows)
     with tabs[8]:
-        st.caption("Catalogo completo: ogni card usa la maschera Monte Carlo corrispondente e visualizza Wilson, affidabilità e Kelly quando è stata inserita una quota.")
-        for group_name, group in result["markets"].items():
-            if group_name in {"1x2", "first_half_1x2", "over_under", "multigol", "goal_no_goal", "corners", "cards", "combos"}:
-                continue
-            if isinstance(group, dict) and group and all(isinstance(value, dict) and "percentage" in value for value in group.values()):
-                _cards_section(group_name.replace("_", " ").title(), group, {key: key.replace("_", " ") for key in group}, {key: key.replace("_", " ") for key in group}, financial_rows)
+        st.caption("Catalogo centrale: le card sono generate dalle definizioni condivise da parser, motore e dashboard.")
+        for group in MARKET_GROUPS:
+            _catalog_cards_section(group, result, financial_rows)
 
     st.subheader("Schedina mista")
     st.write(result["smart_combo"]["message"])

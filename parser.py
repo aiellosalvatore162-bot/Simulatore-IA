@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 import re
 from typing import Optional
 
+from market_catalog import definition_for_event, normalize_market_label
 
 @dataclass(frozen=True)
 class ParsedTeam:
@@ -60,32 +61,12 @@ _ODDS_LINE = re.compile(
 )
 
 
-def _odds_key(label: str) -> str:
-    normalized = re.sub(r"\s+", " ", label.strip())
-    aliases = {
-        "1": "1",
-        "x": "X",
-        "2": "2",
-        "1x": "1X",
-        "x2": "X2",
-        "12": "12",
-    }
-    lowered = normalized.lower()
-    if lowered in aliases:
-        return aliases[lowered]
-    normalized = re.sub(r"^over\s+", "Over ", normalized, flags=re.IGNORECASE)
-    normalized = re.sub(r"^under\s+", "Under ", normalized, flags=re.IGNORECASE)
-    if re.fullmatch(r"(?:Over|Under) \d+(?:[.,]\d+)?", normalized, re.IGNORECASE):
-        return f"{normalized.replace(',', '.')} gol"
-    return normalized
-
-
-def _collect_odds(item: str, section: dict[str, str], odds: dict[str, str]) -> bool:
+def _collect_odds(item: str) -> tuple[str, str] | None:
     match = _ODDS_LINE.match(item.strip())
     if not match:
-        return False
-    odds[_odds_key(match.group("label"))] = match.group("value")
-    return True
+        return None
+    key = normalize_market_label(match.group("label"))
+    return key, match.group("value")
 
 
 def _number(value: str, field_name: str) -> float:
@@ -96,9 +77,9 @@ def _number(value: str, field_name: str) -> float:
         raise MatchInputError(f"{field_name}: valore numerico non valido: {value!r}") from exc
 
 
-def _section_lines(text: str) -> tuple[dict[str, str], dict[str, str], dict[str, str], dict[str, str]]:
+def _section_lines(text: str) -> tuple[dict[str, str], dict[str, str], dict[str, str], list[tuple[str, str]]]:
     sections: dict[str, dict[str, str]] = {"home": {}, "away": {}, "referee": {}}
-    odds: dict[str, str] = {}
+    odds: list[tuple[str, str]] = []
     section: Optional[str] = None
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -109,14 +90,18 @@ def _section_lines(text: str) -> tuple[dict[str, str], dict[str, str], dict[str,
             parts = [part.strip() for part in line.split("|")]
             sections["home"]["name"] = parts[0].split(":", 1)[1].strip()
             for item in parts[1:]:
-                _collect_odds(item, sections["home"], odds)
+                quote = _collect_odds(item)
+                if quote:
+                    odds.append(quote)
             section = "home"
             continue
         if upper.startswith("OSPITE:"):
             parts = [part.strip() for part in line.split("|")]
             sections["away"]["name"] = parts[0].split(":", 1)[1].strip()
             for item in parts[1:]:
-                _collect_odds(item, sections["away"], odds)
+                quote = _collect_odds(item)
+                if quote:
+                    odds.append(quote)
             section = "away"
             continue
         if upper.startswith("ARBITRO:"):
@@ -130,7 +115,9 @@ def _section_lines(text: str) -> tuple[dict[str, str], dict[str, str], dict[str,
             continue
         if section in ("home", "away"):
             for item in line.split("|"):
-                if _collect_odds(item, sections[section], odds):
+                quote = _collect_odds(item)
+                if quote:
+                    odds.append(quote)
                     continue
                 match = _TEAM_LINE.match(item.strip())
                 if match:
@@ -221,8 +208,18 @@ def parse_match_input(text: str) -> MatchInput:
         fouls = _number(fouls_raw, "ARBITRO Falli medi")
 
     odds: dict[str, float] = {}
-    for market, raw_value in raw_odds.items():
-        odds[market] = _number(raw_value, f"Quota {market}")
+    for market, raw_value in raw_odds:
+        if definition_for_event(market) is None:
+            warnings.append(f"Quota {market}: mercato non supportato, quota scartata")
+            continue
+        value = _number(raw_value, f"Quota {market}")
+        if value <= 1.0:
+            warnings.append(f"Quota {market}: deve essere maggiore di 1.0, quota scartata")
+            continue
+        if market in odds:
+            warnings.append(f"Quota {market}: duplicata, mantenuta la prima quota")
+            continue
+        odds[market] = value
 
     return MatchInput(
         home=home,

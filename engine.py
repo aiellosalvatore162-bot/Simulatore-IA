@@ -14,6 +14,7 @@ from typing import Any, Mapping
 import numpy as np
 from scipy.stats import poisson
 
+from market_catalog import MARKET_CATALOG, definition_for_event
 from parser import MatchInput
 
 
@@ -176,6 +177,8 @@ def _event_catalog(
         "Ospite non segna": away == 0,
         "Casa DNB": home > away,
         "Ospite DNB": away > home,
+        "Casa DNB push": home == away,
+        "Ospite DNB push": home == away,
         "BTTS entrambi i tempi": (first_home > 0) & (first_away > 0) & (second_home > 0) & (second_away > 0),
         "BTTS almeno un tempo": ((first_home > 0) & (first_away > 0)) | ((second_home > 0) & (second_away > 0)),
         "1 secondo tempo": second_home > second_away,
@@ -258,7 +261,7 @@ def _probability(mask: np.ndarray) -> float:
 
 
 def financial_analysis(events: Mapping[str, np.ndarray], odds: Mapping[str, float] | None) -> dict[str, Any]:
-    """Calculate fair probability, EV and quarter-Kelly stake for user odds."""
+    """Calculate settlement-aware EV and quarter-Kelly stake for user odds."""
     candidates: list[dict[str, Any]] = []
     for market, raw_odd in (odds or {}).items():
         if market not in events:
@@ -271,10 +274,14 @@ def financial_analysis(events: Mapping[str, np.ndarray], odds: Mapping[str, floa
             continue
         probability = _probability(events[market])
         confidence_interval = _confidence(events[market])
+        definition = definition_for_event(market)
+        push_probability = _probability(events[f"{market} push"]) if definition and definition.settlement == "push" else 0.0
+        loss_probability = max(0.0, 1.0 - probability - push_probability)
         edge = probability - (1.0 / odd)
-        ev = probability * odd - 1.0
-        denominator = odd - 1.0
-        full_kelly = max(0.0, (probability * odd - 1.0) / denominator) if denominator else 0.0
+        ev = probability * (odd - 1.0) - loss_probability
+        denominator = (odd - 1.0) * (probability + loss_probability)
+        full_kelly = max(0.0, (probability * (odd - 1.0) - loss_probability) / denominator) if denominator else 0.0
+        fair_odds = 1.0 + loss_probability / probability if probability > 0 else None
         candidates.append({
             "market": market,
             "odds": odd,
@@ -282,6 +289,9 @@ def financial_analysis(events: Mapping[str, np.ndarray], odds: Mapping[str, floa
             "implied_probability_pct": round(100.0 / odd, 2),
             "edge_pct": round(edge * 100.0, 2),
             "ev_pct": round(ev * 100.0, 2),
+            "push_probability_pct": round(push_probability * 100.0, 2),
+            "loss_probability_pct": round(loss_probability * 100.0, 2),
+            "fair_odds": round(fair_odds, 3) if fair_odds is not None else None,
             "kelly_pct": round(full_kelly * 100.0, 2),
             "kelly_fraction": 0.25,
             "recommended_quarter_kelly_pct": round(full_kelly * 25.0, 2),
@@ -300,54 +310,64 @@ def financial_analysis(events: Mapping[str, np.ndarray], odds: Mapping[str, floa
 
 
 def smart_combo(events: Mapping[str, np.ndarray], odds: Mapping[str, float] | None) -> dict[str, Any]:
-    """Select a conservative mixed-market double when both legs have quotes."""
+    """Rank every quoted two-leg combination by value and stability."""
     if not odds:
         return {"status": "no_quotes", "legs": [], "message": "Inserire almeno due quote per calcolare una schedina."}
-    preferred = (
-        ("1X", "Over 1.5 gol"),
-        ("X2", "Under 3.5 gol"),
-        ("Multigol 2-4", "Under 8.5 corner"),
-        ("Over 8.5 corner", "Over 4.5 cartellini"),
-    )
     options: list[dict[str, Any]] = []
-    for first, second in preferred:
-        if first not in events or second not in events or first not in odds or second not in odds:
-            continue
-        try:
-            odd_a, odd_b = float(odds[first]), float(odds[second])
-        except (TypeError, ValueError):
-            continue
-        if odd_a <= 1.0 or odd_b <= 1.0:
-            continue
-        joint = events[first] & events[second]
-        probability = _probability(joint)
-        confidence_interval = _confidence(joint)
-        total_odd = odd_a * odd_b
-        ev = probability * total_odd - 1.0
-        denominator = total_odd - 1.0
-        full_kelly = max(0.0, ev / denominator) if denominator else 0.0
-        options.append({
-            "legs": [first, second],
-            "odds": [odd_a, odd_b],
-            "combined_odds": round(total_odd, 3),
-            "simulated_probability_pct": round(probability * 100.0, 2),
-            "ev_pct": round(ev * 100.0, 2),
-            "joint_count": int(joint.sum()),
-            "kelly_pct": round(full_kelly * 100.0, 2),
-            "kelly_fraction": 0.25,
-            "recommended_quarter_kelly_pct": round(full_kelly * 25.0, 2),
-            "recommended_stake_pct": round(full_kelly * 25.0, 2),
-            "confidence_interval_95": confidence_interval,
-            "reliability_pct": _reliability(confidence_interval),
-            "is_value": ev > 0.0,
-        })
-    options.sort(key=lambda item: (item["ev_pct"], item["simulated_probability_pct"]), reverse=True)
+    available = [market for market in odds if market in events and definition_for_event(market) and " + " not in market]
+    for index, first in enumerate(available):
+        for second in available[index + 1:]:
+            if first == second:
+                continue
+            try:
+                odd_a, odd_b = float(odds[first]), float(odds[second])
+            except (TypeError, ValueError):
+                continue
+            if odd_a <= 1.0 or odd_b <= 1.0:
+                continue
+            joint = events[first] & events[second]
+            probability = _probability(joint)
+            total_odd = odd_a * odd_b
+            ev = probability * total_odd - 1.0
+            if ev <= 0.0:
+                continue
+            confidence_interval = _confidence(joint)
+            denominator = total_odd - 1.0
+            full_kelly = max(0.0, ev / denominator) if denominator else 0.0
+            reliability = _reliability(confidence_interval)
+            options.append({
+                "legs": [first, second],
+                "odds": [odd_a, odd_b],
+                "combined_odds": round(total_odd, 3),
+                "simulated_probability_pct": round(probability * 100.0, 2),
+                "ev_pct": round(ev * 100.0, 2),
+                "joint_count": int(joint.sum()),
+                "kelly_pct": round(full_kelly * 100.0, 2),
+                "kelly_fraction": 0.25,
+                "recommended_quarter_kelly_pct": round(full_kelly * 25.0, 2),
+                "recommended_stake_pct": round(full_kelly * 25.0, 2),
+                "confidence_interval_95": confidence_interval,
+                "reliability_pct": reliability,
+                "risk_reward_score": round(ev * (reliability / 100.0), 6),
+                "is_value": True,
+            })
+    options.sort(key=lambda item: (item["risk_reward_score"], item["ev_pct"]), reverse=True)
     return {
         "status": "ready" if options else "insufficient_quotes",
         "recommendation": options[0] if options else None,
         "candidates": options,
         "message": "La probabilità è congiunta sui campioni simulati, non il prodotto di probabilità indipendenti.",
     }
+
+
+def _catalog_markets(events: Mapping[str, np.ndarray]) -> dict[str, dict[str, dict[str, Any]]]:
+    """Materialize every catalog definition from the shared event namespace."""
+    groups: dict[str, dict[str, dict[str, Any]]] = {}
+    for definition in MARKET_CATALOG:
+        if definition.event_key not in events:
+            continue
+        groups.setdefault(definition.group, {})[definition.key] = _market(events[definition.event_key])
+    return groups
 
 
 def statistical_report(config: MatchConfig, result: Mapping[str, Any]) -> str:
@@ -441,6 +461,7 @@ def simulate_match(config: MatchConfig) -> dict[str, Any]:
         "card_1x2": {key: _market(events[f"{key} cartellini"]) for key in ("1", "X", "2")},
         "team_cards": {key.replace(" ", "_"): _market(value) for key, value in events.items() if key.startswith(("Casa ", "Ospite ")) and "cartellini" in key},
     }
+    markets["catalog"] = _catalog_markets(events)
     outcomes = {"1": home > away, "X": home == away, "2": home < away}
     score_pairs, counts = np.unique(np.column_stack((home, away)), axis=0, return_counts=True)
     mode = score_pairs[int(np.argmax(counts))]
@@ -460,7 +481,9 @@ def simulate_match(config: MatchConfig) -> dict[str, Any]:
     result["summary"]["reliability"] = {
         "index_pct": round(float(np.clip(100.0 - interval_width, 0.0, 100.0)), 2),
         "method": "100 - media ampiezza degli intervalli Wilson 95% sugli esiti 1X2",
-        "warning": "Non misura la qualità dei dati di input o la correttezza del modello.",
+        "warning": "La stabilità Monte Carlo non misura la qualità degli input né l'incertezza strutturale del modello.",
+        "sampling_stability_pct": round(float(np.clip(100.0 - interval_width, 0.0, 100.0)), 2),
+        "model_uncertainty": "Non stimata: richiede una distribuzione sui parametri e validazione out-of-sample.",
     }
     result["financial"] = financial_analysis(events, getattr(config, "odds", None))
     result["smart_combo"] = smart_combo(events, getattr(config, "odds", None))

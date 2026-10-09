@@ -78,6 +78,16 @@ def test_quotes_from_parsed_input_reach_value_bet_analysis():
     assert all("recommended_stake_pct" in row for row in result["financial"]["markets"])
 
 
+def test_dnb_financial_settlement_exposes_push_probability():
+    config = config_from_input(parse_match_input(VALID), simulations=4000, seed=6)
+    config = config.__class__(**{**config.__dict__, "odds": {"Casa DNB": 1.70}})
+    result = simulate_match(config)
+    row = result["financial"]["markets"][0]
+    assert row["market"] == "Casa DNB"
+    assert row["push_probability_pct"] > 0
+    assert 0 <= row["loss_probability_pct"] <= 100
+
+
 def test_report_is_consistent_with_returned_probabilities():
     result = simulate_match(config_from_input(parse_match_input(VALID), simulations=3000, seed=2))
     report = result["statistical_report"]

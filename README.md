@@ -33,6 +33,13 @@ Le quote sono opzionali e possono essere aggiunte alle righe `CASA` e
 `Quota Under 3.5`. Vengono normalizzate dal parser e passate automaticamente
 al motore per l'analisi Value Bet.
 
+Il catalogo dichiarativo condiviso è in [`market_catalog.py`](./market_catalog.py):
+le sue definizioni vengono usate per normalizzare le quote, validare i mercati,
+materializzare il gruppo `markets["catalog"]` e generare le card del tab
+Catalogo. Per i mercati DNB il risultato distingue vittoria, perdita e
+rimborso (`push`); il Kelly e l'EV usano il settlement a tre esiti invece di
+trattare il pareggio come una perdita.
+
 ## Modello
 
 Il motore:
@@ -66,3 +73,8 @@ bankroll, mai come garanzia di profitto.
 
 Ogni card mostra inoltre la quota equa stimata dal modello (`1 / probabilità`)
 anche quando non è stata inserita una quota bookmaker.
+
+Gli intervalli Wilson e l'indice mostrato come stabilità sono riferiti alla
+variabilità del campione Monte Carlo. Non sono una stima dell'incertezza dei
+parametri del modello: questa richiede una distribuzione sui parametri e una
+validazione out-of-sample, non ancora inclusa nell'applicazione.

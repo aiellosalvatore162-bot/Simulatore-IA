@@ -45,3 +45,15 @@ def test_parser_reads_optional_bookmaker_quotes_from_team_headers():
     )
     match = parse_match_input(text)
     assert match.odds == {"1": 1.85, "Over 2.5 gol": 2.10, "X": 3.40, "2": 4.20}
+
+
+def test_parser_rejects_invalid_duplicate_and_unknown_quotes_with_warnings():
+    text = VALID.replace(
+        "CASA: Inter",
+        "CASA: Inter | Quota 1: 1.85 | Quota 1: 1.90 | Quota Casa Over 1.5: 2.00 | Quota Sconosciuta: 5.00 | Quota X: 1.00",
+    )
+    match = parse_match_input(text)
+    assert match.odds == {"1": 1.85, "Casa Over 1.5 gol": 2.00}
+    assert any("duplicata" in warning for warning in match.warnings)
+    assert any("non supportato" in warning for warning in match.warnings)
+    assert any("maggiore di 1.0" in warning for warning in match.warnings)
