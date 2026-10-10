@@ -282,16 +282,17 @@ def _card(
     push = financial.get("push_probability_pct")
     fair_odds = market.get("fair_odds")
     if quote is None:
-        comparison = "Quota: non inserita"
+        comparison = "Quota bookmaker —"
         badge = '<span class="badge neutral">SOLO MODELLO</span>'
     else:
-        comparison = f"Quota {float(quote):.2f} · Implicita {float(implied):.2f}%"
+        comparison = f"Quota bookmaker {float(quote):.2f} · Implicita {float(implied):.2f}%"
         badge_class = "positive" if float(ev) > 0 else "negative"
         badge_text = f"VALORE +{float(ev):.2f}%" if float(ev) > 0 else f"EV {float(ev):.2f}%"
         badge = f'<span class="badge {badge_class}">{badge_text}</span>'
-    fair_meta = f" · Quota equa {float(fair_odds):.3f}" if fair_odds is not None else ""
+    fair_meta = f" · Quota equa {float(fair_odds):.3f}" if fair_odds is not None else " · Quota equa —"
+    ev_meta = f" · EV {float(ev):+.2f}%" if ev is not None else " · EV —"
     push_meta = f" · Push {float(push):.2f}%" if push is not None and float(push) > 0 else ""
-    stake_meta = f" · Quarter-Kelly {float(stake):.2f}% bankroll" if stake is not None else ""
+    stake_meta = f" · Quarter-Kelly {float(stake):.2f}% bankroll" if stake is not None else " · Quarter-Kelly —"
     st.markdown(
         f"""
         <div class="score-card">
@@ -299,7 +300,7 @@ def _card(
           <div class="confidence">Affidabilità {reliability:.2f}% · Wilson 95% [{float(interval[0]):.2f}%, {float(interval[1]):.2f}%]</div>
           <div class="market">{label}</div>
           <div class="prob">{probability:.2f}%</div>
-          <div class="meta">Score Modello · {comparison}{fair_meta}{push_meta}{stake_meta}</div>
+          <div class="meta">Score Modello · {comparison}{fair_meta}{ev_meta}{push_meta}{stake_meta}</div>
           {badge}
         </div>
         """,
@@ -316,31 +317,14 @@ def _cards_section(
     columns: int = 3,
 ) -> None:
     st.markdown(f'<div class="section-kicker">{title}</div>', unsafe_allow_html=True)
-    rows = []
-    for key, market in items.items():
-        event_name = event_names.get(key, key)
-        financial = financial_rows.get(event_name, financial_rows.get(key.replace("_", " "), {}))
-        interval = market.get("confidence_interval_95", [0.0, 0.0])
-        quote = financial.get("odds")
-        ev = financial.get("ev_pct")
-        stake = financial.get("recommended_quarter_kelly_pct")
-        rows.append(
-            {
-                "Mercato": labels.get(key, key),
-                "Quota": f"{float(quote):.2f}" if quote is not None else "—",
-                "Probabilità": f'{float(market["percentage"]):.2f}%',
-                "Wilson 95%": f"[{float(interval[0]):.2f}%, {float(interval[1]):.2f}%]",
-                "EV": f"{float(ev):+.2f}%" if ev is not None else "—",
-                "Badge Valore": (
-                    f"VALORE +{float(ev):.2f}%" if ev is not None and float(ev) > 0
-                    else "NESSUN VALORE" if ev is not None
-                    else "SOLO MODELLO"
-                ),
-                "Quarter-Kelly": f"{float(stake):.2f}%" if stake is not None else "—",
-            }
-        )
-    if rows:
-        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    entries = list(items.items())
+    for start in range(0, len(entries), columns):
+        card_columns = st.columns(columns, gap="medium")
+        for column, (key, market) in zip(card_columns, entries[start:start + columns]):
+            event_name = event_names.get(key, key)
+            financial = financial_rows.get(event_name, financial_rows.get(key.replace("_", " "), {}))
+            with column:
+                _card(title, labels.get(key, key), market, financial)
 
 
 def _catalog_cards_section(group: str, result: dict, financial_rows: dict) -> None:
@@ -354,29 +338,9 @@ def _catalog_cards_section(group: str, result: dict, financial_rows: dict) -> No
     if not entries:
         return
     st.markdown(f'<div class="section-kicker">{group.replace("_", " ").title()}</div>', unsafe_allow_html=True)
-    rows = []
     for definition, market in entries:
         financial = financial_rows.get(definition.event_key, {})
-        interval = market.get("confidence_interval_95", [0.0, 0.0])
-        quote = financial.get("odds")
-        ev = financial.get("ev_pct")
-        stake = financial.get("recommended_quarter_kelly_pct")
-        rows.append(
-            {
-                "Mercato": definition.label,
-                "Quota": f"{float(quote):.2f}" if quote is not None else "—",
-                "Probabilità": f'{float(market["percentage"]):.2f}%',
-                "Wilson 95%": f"[{float(interval[0]):.2f}%, {float(interval[1]):.2f}%]",
-                "EV": f"{float(ev):+.2f}%" if ev is not None else "—",
-                "Badge Valore": (
-                    f"VALORE +{float(ev):.2f}%" if ev is not None and float(ev) > 0
-                    else "NESSUN VALORE" if ev is not None
-                    else "SOLO MODELLO"
-                ),
-                "Quarter-Kelly": f"{float(stake):.2f}%" if stake is not None else "—",
-            }
-        )
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        _card(group.replace("_", " ").title(), definition.label, market, financial)
 
 
 result = st.session_state.get("result")

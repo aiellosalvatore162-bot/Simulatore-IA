@@ -46,11 +46,15 @@ Il motore:
 
 1. costruisce `lambda` e `mu` con attacco, difesa avversaria, xG, forma ed Elo;
 2. applica la correzione Dixon-Coles ai punteggi `0-0`, `0-1`, `1-0`, `1-1`;
-3. campiona la matrice con Monte Carlo usando il seed scelto;
-4. calcola 1X2, Over/Under, Goal/No Goal, corner e cartellini;
-5. mostra score modale, intervalli Wilson e il ledger dei contributi;
-6. espone per ogni mercato l'intervallo Wilson 95% e l'affidabilità campionaria;
-7. calcola EV e Kelly frazionato (Quarter-Kelly, 25% del Kelly pieno) per le
+3. campiona prima `goals_home` e `goals_away` per ogni iterazione (default
+   100.000 simulazioni) usando il seed scelto;
+4. deriva tutti i mercati score-dependent dagli stessi due vettori, inclusi
+   1X2, doppia chance, DNB, Goal/No Goal, Over/Under, somme e multigol totali
+   e di squadra;
+5. calcola corner e cartellini con i rispettivi campioni indipendenti;
+6. mostra score modale, intervalli Wilson e il ledger dei contributi;
+7. espone per ogni mercato l'intervallo Wilson 95% e l'affidabilità campionaria;
+8. calcola EV e Kelly frazionato (Quarter-Kelly, 25% del Kelly pieno) per le
    Value Bet e per la Schedina Mista.
 
 Il catalogo `result["markets"]` espone inoltre tutti i mercati richiesti,
@@ -71,8 +75,10 @@ qualità dei dati inseriti né la correttezza del modello. Il Kelly pieno usa
 Quarter-Kelly (il 25% del valore pieno) come stake massimo indicativo del
 bankroll, mai come garanzia di profitto.
 
-Ogni card mostra inoltre la quota equa stimata dal modello (`1 / probabilità`)
-anche quando non è stata inserita una quota bookmaker.
+La dashboard usa card per ogni mercato: probabilità simulata, quota bookmaker
+(se presente), quota equa, Wilson 95%, EV e Quarter-Kelly. Le card dei
+multigol di Casa e Ospite sono sezioni separate e includono tutte le fasce
+standard e quelle richieste dalle quote in input.
 
 Gli intervalli Wilson e l'indice mostrato come stabilità sono riferiti alla
 variabilità del campione Monte Carlo. Non sono una stima dell'incertezza dei

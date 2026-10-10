@@ -43,7 +43,7 @@ class MatchConfig:
     away: TeamParams
     referee_yellow_avg: float
     referee_fouls_avg: float
-    simulations: int = 50_000
+    simulations: int = 100_000
     seed: int = 42
     home_advantage: float = 1.15
     base_goals_home: float = 1.38
@@ -52,7 +52,7 @@ class MatchConfig:
     odds: dict[str, float] | None = None
 
 
-def config_from_input(match: MatchInput, simulations: int = 50_000, seed: int = 42) -> MatchConfig:
+def config_from_input(match: MatchInput, simulations: int = 100_000, seed: int = 42) -> MatchConfig:
     def team(value: Any) -> TeamParams:
         return TeamParams(
             name=value.name,
@@ -453,6 +453,12 @@ def statistical_report(config: MatchConfig, result: Mapping[str, Any]) -> str:
 
 
 def simulate_match(config: MatchConfig) -> dict[str, Any]:
+    """Run one reproducible sample and derive every score market from it.
+
+    ``goals_home`` and ``goals_away`` are created once per simulation.  No
+    market below samples goals again, so all score-dependent probabilities are
+    projections of the same exact-score observations.
+    """
     lambda_, mu, ledger = expected_goals(config)
     rng = np.random.default_rng(config.seed)
     first_half_matrix = dixon_coles_matrix(lambda_ / 2.0, mu / 2.0, config.dixon_coles_rho)
@@ -463,9 +469,9 @@ def simulate_match(config: MatchConfig) -> dict[str, Any]:
     second_half_choices = rng.choice(first_half_matrix.size, size=config.simulations, p=first_half_matrix.ravel())
     second_home = second_half_choices // first_half_size
     second_away = second_half_choices % first_half_size
-    home = first_home + second_home
-    away = first_away + second_away
-    total = home + away
+    goals_home = first_home + second_home
+    goals_away = first_away + second_away
+    total = goals_home + goals_away
     home_corner_mean = max(0.1, np.mean([config.home.corners_for, config.away.corners_against]) * 4.5)
     away_corner_mean = max(0.1, np.mean([config.away.corners_for, config.home.corners_against]) * 4.5)
     home_card_mean = max(0.1, np.mean([config.home.cards_for, config.referee_yellow_avg / 2.0]))
@@ -477,7 +483,7 @@ def simulate_match(config: MatchConfig) -> dict[str, Any]:
     corners = home_corners + away_corners
     cards = home_cards + away_cards
     events = _event_catalog(
-        home, away, first_home, first_away, second_home, second_away,
+        goals_home, goals_away, first_home, first_away, second_home, second_away,
         home_corners, away_corners, home_cards, away_cards,
         _team_multigol_ranges(getattr(config, "odds", None)),
     )
@@ -528,8 +534,8 @@ def simulate_match(config: MatchConfig) -> dict[str, Any]:
         "team_cards": {key.replace(" ", "_"): _market(value) for key, value in events.items() if key.startswith(("Casa ", "Ospite ")) and "cartellini" in key},
     }
     markets["catalog"] = _catalog_markets(events)
-    outcomes = {"1": home > away, "X": home == away, "2": home < away}
-    score_pairs, counts = np.unique(np.column_stack((home, away)), axis=0, return_counts=True)
+    outcomes = {"1": goals_home > goals_away, "X": goals_home == goals_away, "2": goals_home < goals_away}
+    score_pairs, counts = np.unique(np.column_stack((goals_home, goals_away)), axis=0, return_counts=True)
     mode = score_pairs[int(np.argmax(counts))]
     result = {
         "input": {"home": config.home.__dict__, "away": config.away.__dict__, "referee_yellow_avg": config.referee_yellow_avg, "referee_fouls_avg": config.referee_fouls_avg},
@@ -557,8 +563,8 @@ def simulate_match(config: MatchConfig) -> dict[str, Any]:
     result["dashboard"] = {
         "goals_distribution": {
             "goals": list(range(0, 8)),
-            "home": [round(float(np.mean(home == value) * 100), 2) for value in range(0, 8)],
-            "away": [round(float(np.mean(away == value) * 100), 2) for value in range(0, 8)],
+            "home": [round(float(np.mean(goals_home == value) * 100), 2) for value in range(0, 8)],
+            "away": [round(float(np.mean(goals_away == value) * 100), 2) for value in range(0, 8)],
         },
         "strength_comparison": {
             "labels": ["Attacco", "Difesa inversa", "xG fatti", "xG subiti", "Elo normalizzato"],
