@@ -51,7 +51,8 @@ Il motore:
 4. deriva tutti i mercati score-dependent dagli stessi due vettori, inclusi
    1X2, doppia chance, DNB, Goal/No Goal, Over/Under, somme e multigol totali
    e di squadra;
-5. calcola corner e cartellini con i rispettivi campioni indipendenti;
+5. calcola un unico totale Poisson per corner e cartellini, poi ripartisce
+   ciascun totale tra Casa e Ospite senza alterare le soglie del match;
 6. mostra score modale, intervalli Wilson e il ledger dei contributi;
 7. espone per ogni mercato l'intervallo Wilson 95% e l'affidabilità campionaria;
 8. calcola EV e Kelly frazionato (Quarter-Kelly, 25% del Kelly pieno) per le

@@ -461,27 +461,53 @@ def simulate_match(config: MatchConfig) -> dict[str, Any]:
     """
     lambda_, mu, ledger = expected_goals(config)
     rng = np.random.default_rng(config.seed)
-    first_half_matrix = dixon_coles_matrix(lambda_ / 2.0, mu / 2.0, config.dixon_coles_rho)
-    first_half_choices = rng.choice(first_half_matrix.size, size=config.simulations, p=first_half_matrix.ravel())
-    first_half_size = first_half_matrix.shape[0]
-    first_home = first_half_choices // first_half_size
-    first_away = first_half_choices % first_half_size
-    second_half_choices = rng.choice(first_half_matrix.size, size=config.simulations, p=first_half_matrix.ravel())
-    second_home = second_half_choices // first_half_size
-    second_away = second_half_choices % first_half_size
-    goals_home = first_home + second_home
-    goals_away = first_away + second_away
+    # The final score is the single source of truth for every full-match
+    # score market.  Sampling the two teams independently preserves the
+    # Poisson model rather than manufacturing goals by adding half-time
+    # samples with a different distribution.
+    goals_home = rng.poisson(lambda_, config.simulations)
+    goals_away = rng.poisson(mu, config.simulations)
+
+    # Half-time markets are independent auxiliary observations and do not
+    # feed any full-match market.
+    first_home = rng.poisson(lambda_ / 2.0, config.simulations)
+    first_away = rng.poisson(mu / 2.0, config.simulations)
+    second_home = rng.poisson(lambda_ / 2.0, config.simulations)
+    second_away = rng.poisson(mu / 2.0, config.simulations)
+
+    # Corner inputs are relative team rates.  Use one combined expected rate
+    # (scaled to the usual match-level range) and sample the match total once.
+    # Binomial allocation keeps home + away exactly equal to that total.
+    home_corner_signal = max(0.0, np.mean([config.home.corners_for, config.away.corners_against]))
+    away_corner_signal = max(0.0, np.mean([config.away.corners_for, config.home.corners_against]))
+    corner_signal_total = home_corner_signal + away_corner_signal
+    corner_total_mean = max(0.1, corner_signal_total * 4.5)
+    corners = rng.poisson(corner_total_mean, config.simulations)
+    home_corner_share = (
+        home_corner_signal / corner_signal_total if corner_signal_total > 0.0 else 0.5
+    )
+    home_corners = rng.binomial(corners, home_corner_share)
+    away_corners = corners - home_corners
+
+    # Team card propensity is adjusted by the referee's observed severity:
+    # yellow average is the level factor and fouls average is the tempo factor.
+    foul_factor = max(0.0, config.referee_fouls_avg / 24.0)
+    referee_severity = max(0.0, config.referee_yellow_avg / 4.5)
+    card_total_mean = max(
+        0.1,
+        (config.home.cards_for + config.away.cards_for)
+        * referee_severity
+        * foul_factor,
+    )
+    cards = rng.poisson(card_total_mean, config.simulations)
+    card_signal_total = max(0.0, config.home.cards_for + config.away.cards_for)
+    home_card_share = (
+        config.home.cards_for / card_signal_total if card_signal_total > 0.0 else 0.5
+    )
+    home_cards = rng.binomial(cards, home_card_share)
+    away_cards = cards - home_cards
+
     total = goals_home + goals_away
-    home_corner_mean = max(0.1, np.mean([config.home.corners_for, config.away.corners_against]) * 4.5)
-    away_corner_mean = max(0.1, np.mean([config.away.corners_for, config.home.corners_against]) * 4.5)
-    home_card_mean = max(0.1, np.mean([config.home.cards_for, config.referee_yellow_avg / 2.0]))
-    away_card_mean = max(0.1, np.mean([config.away.cards_for, config.referee_yellow_avg / 2.0]))
-    home_corners = rng.poisson(home_corner_mean, config.simulations)
-    away_corners = rng.poisson(away_corner_mean, config.simulations)
-    home_cards = rng.poisson(home_card_mean, config.simulations)
-    away_cards = rng.poisson(away_card_mean, config.simulations)
-    corners = home_corners + away_corners
-    cards = home_cards + away_cards
     events = _event_catalog(
         goals_home, goals_away, first_home, first_away, second_home, second_away,
         home_corners, away_corners, home_cards, away_cards,
