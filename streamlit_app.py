@@ -37,6 +37,7 @@ st.markdown(
     .score-card .confidence { color: #d6e3f5; font-size: .78rem; font-weight: 650; }
     .score-card .badge { display: inline-block; border-radius: 999px; padding: 4px 9px; margin-top: 9px; font-size: .7rem; font-weight: 750; }
     .score-card .positive { color: #b8f7d1; background: #124b38; }
+    .score-card .negative { color: #ffd0d0; background: #632b35; }
     .score-card .neutral { color: #c2ccdb; background: #29374c; }
     .section-kicker { color: #6f83a2; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; font-size: .78rem; margin: 18px 0 8px; }
     .input-card-title { color: #f4f7fb; font-size: 1.15rem; font-weight: 750; margin-bottom: 2px; }
@@ -285,8 +286,8 @@ def _card(
         badge = '<span class="badge neutral">SOLO MODELLO</span>'
     else:
         comparison = f"Quota {float(quote):.2f} · Implicita {float(implied):.2f}%"
-        badge_class = "positive" if float(ev) > 0 else "neutral"
-        badge_text = f"VALORE +{float(ev):.2f}%" if float(ev) > 0 else f"EDGE {float(ev):.2f}%"
+        badge_class = "positive" if float(ev) > 0 else "negative"
+        badge_text = f"VALORE +{float(ev):.2f}%" if float(ev) > 0 else f"EV {float(ev):.2f}%"
         badge = f'<span class="badge {badge_class}">{badge_text}</span>'
     fair_meta = f" · Quota equa {float(fair_odds):.3f}" if fair_odds is not None else ""
     push_meta = f" · Push {float(push):.2f}%" if push is not None and float(push) > 0 else ""
@@ -447,6 +448,21 @@ if result:
             {key: f"Multigol {key}" for key in result["markets"]["multigol_complete"]},
             financial_rows,
         )
+        team_multigol_tabs = st.tabs(["Multigol Casa", "Multigol Ospite"])
+        for team_tab, team_name in zip(team_multigol_tabs, ("Casa", "Ospite")):
+            with team_tab:
+                team_items = {
+                    key: market
+                    for key, market in result["markets"]["team_multigol"].items()
+                    if key.startswith(f"{team_name} ")
+                }
+                _cards_section(
+                    f"Tutte le fasce · {team_name}",
+                    team_items,
+                    {key: f"Multigol {key}" for key in team_items},
+                    {key: f"Multigol {key}" for key in team_items},
+                    financial_rows,
+                )
         _cards_section(
             "Combo",
             result["markets"]["combos"],
@@ -523,7 +539,6 @@ if result:
     with tabs[7]:
         _cards_section("Goal squadra", result["markets"]["team_scoring"], {"Casa segna": "Casa segna", "Casa non segna": "Casa non segna", "Ospite segna": "Ospite segna", "Ospite non segna": "Ospite non segna"}, {}, financial_rows)
         _cards_section("Goal squadra · Over / Under", result["markets"]["team_goals"], {key: key for key in result["markets"]["team_goals"]}, {key: key for key in result["markets"]["team_goals"]}, financial_rows)
-        _cards_section("Multigol per squadra", result["markets"]["team_multigol"], {key: key for key in result["markets"]["team_multigol"]}, {key: f"Multigol {key}" for key in result["markets"]["team_multigol"]}, financial_rows)
         _cards_section("Somma gol esatta", result["markets"]["goal_sums"], {key: f"Somma gol {key}" for key in result["markets"]["goal_sums"]}, {key: f"Somma gol {key}" for key in result["markets"]["goal_sums"]}, financial_rows)
         _cards_section("BTTS nei tempi", result["markets"]["both_teams"], {key: key for key in result["markets"]["both_teams"]}, {}, financial_rows)
     with tabs[8]:

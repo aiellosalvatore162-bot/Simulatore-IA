@@ -60,6 +60,28 @@ def test_exact_score_two_one_activates_all_dependent_markets():
     assert events["Somma gol 3"][0]
 
 
+def test_team_multigol_ranges_are_dynamic_and_reach_financial_analysis():
+    config = config_from_input(parse_match_input(VALID), simulations=3000, seed=21)
+    config = config.__class__(
+        **{
+            **config.__dict__,
+            "odds": {
+                "Multigol Casa 1-4": 1.75,
+                "Multigol Ospite 3-4": 2.40,
+            },
+        }
+    )
+    result = simulate_match(config)
+
+    assert {"Casa 1-4", "Ospite 3-4"}.issubset(result["markets"]["team_multigol"])
+    financial = {row["market"]: row for row in result["financial"]["markets"]}
+    assert {"Multigol Casa 1-4", "Multigol Ospite 3-4"} == set(financial)
+    for row in financial.values():
+        assert row["fair_odds"] is not None
+        assert len(row["confidence_interval_95"]) == 2
+        assert "recommended_quarter_kelly_pct" in row
+
+
 def test_complete_market_catalog_exposes_all_requested_families():
     result = simulate_match(config_from_input(parse_match_input(VALID), simulations=2000, seed=9))
     markets = result["markets"]

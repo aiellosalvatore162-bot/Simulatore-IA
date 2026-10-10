@@ -66,9 +66,13 @@ _QUOTE_SECTION = re.compile(
     r"QUOTE_CORNER_E_CARTELLINI|QUOTE_COMBO)\s*:?\s*$",
     re.IGNORECASE,
 )
+_TEAM_MULTIGOL_KEY = re.compile(r"^Multigol (Casa|Ospite) \d+-\d+$")
 def _normalize_quote_label(label: str) -> str:
     normalized = re.sub(r"\s+", " ", label.strip().replace("_", " "))
     normalized = re.sub(r"^quota\s+", "", normalized, flags=re.IGNORECASE)
+    team_multigol = re.fullmatch(r"Multigol\s+(Casa|Ospite)\s+(\d+)\s*-\s*(\d+)", normalized, re.IGNORECASE)
+    if team_multigol:
+        return f"Multigol {team_multigol.group(1).title()} {team_multigol.group(2)}-{team_multigol.group(3)}"
     normalized = re.sub(r"\bcorner\b", "corner", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"\bcartellini\b", "cartellini", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"\bgol\b", "gol", normalized, flags=re.IGNORECASE)
@@ -243,7 +247,7 @@ def parse_match_input(text: str) -> MatchInput:
 
     odds: dict[str, float] = {}
     for market, raw_value in raw_odds:
-        if definition_for_event(market) is None:
+        if definition_for_event(market) is None and not _TEAM_MULTIGOL_KEY.fullmatch(market):
             warnings.append(f"Quota {market}: mercato non supportato, quota scartata")
             continue
         value = _number(raw_value, f"Quota {market}")

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import re
 from typing import Any, Mapping
 
 import numpy as np
@@ -16,6 +17,10 @@ from scipy.stats import poisson
 
 from market_catalog import MARKET_CATALOG, definition_for_event
 from parser import MatchInput
+
+
+_DEFAULT_TEAM_MULTIGOL_RANGES = ((1, 2), (1, 3), (2, 3))
+_TEAM_MULTIGOL_KEY = re.compile(r"^Multigol (?P<team>Casa|Ospite) (?P<low>\d+)-(?P<high>\d+)$")
 
 
 @dataclass(frozen=True)
@@ -154,6 +159,7 @@ def _event_catalog(
     away_corners: np.ndarray,
     home_cards: np.ndarray,
     away_cards: np.ndarray,
+    team_multigol_ranges: tuple[tuple[int, int], ...] = _DEFAULT_TEAM_MULTIGOL_RANGES,
 ) -> dict[str, np.ndarray]:
     total = home + away
     first_total = first_home + first_away
@@ -199,7 +205,7 @@ def _event_catalog(
     for low, high in ((1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (2, 5), (3, 5), (3, 6)):
         events[f"Multigol {low}-{high}"] = (total >= low) & (total <= high)
     for team_name, values in (("Casa", home), ("Ospite", away)):
-        for low, high in ((1, 2), (1, 3), (2, 3)):
+        for low, high in team_multigol_ranges:
             events[f"Multigol {team_name} {low}-{high}"] = (values >= low) & (values <= high)
     for value in range(5):
         events[f"Somma gol {value}"] = total == value
@@ -254,6 +260,19 @@ def _event_catalog(
         events[f"1 + Multigol {low}-{high}"] = events["1"] & events[f"Multigol {low}-{high}"]
         events[f"2 + Multigol {low}-{high}"] = events["2"] & events[f"Multigol {low}-{high}"]
     return events
+
+
+def _team_multigol_ranges(odds: Mapping[str, float] | None) -> tuple[tuple[int, int], ...]:
+    """Return default plus every valid team range explicitly requested by odds."""
+    ranges = set(_DEFAULT_TEAM_MULTIGOL_RANGES)
+    for key in odds or {}:
+        match = _TEAM_MULTIGOL_KEY.fullmatch(key.strip())
+        if not match:
+            continue
+        low, high = int(match["low"]), int(match["high"])
+        if low <= high:
+            ranges.add((low, high))
+    return tuple(sorted(ranges))
 
 
 def _validate_event_catalog(events: Mapping[str, np.ndarray], simulations: int) -> None:
@@ -460,6 +479,7 @@ def simulate_match(config: MatchConfig) -> dict[str, Any]:
     events = _event_catalog(
         home, away, first_home, first_away, second_home, second_away,
         home_corners, away_corners, home_cards, away_cards,
+        _team_multigol_ranges(getattr(config, "odds", None)),
     )
     _validate_event_catalog(events, config.simulations)
     markets = {
@@ -481,7 +501,11 @@ def simulate_match(config: MatchConfig) -> dict[str, Any]:
         "team_goals": {key: _market(events[key]) for key in events if key.startswith(("Casa ", "Ospite ")) and "gol" in key},
         "multigol": {key.replace("Multigol ", ""): _market(events[f"Multigol {key}"]) for key in ("1-2", "1-3", "2-4", "2-5")},
         "multigol_complete": {key.replace("Multigol ", ""): _market(value) for key, value in events.items() if key.startswith("Multigol ") and key.count(" ") == 1},
-        "team_multigol": {key.replace("Multigol ", ""): _market(value) for key, value in events.items() if key.startswith("Multigol ") and key.count(" ") == 2},
+        "team_multigol": {
+            key.replace("Multigol ", ""): _market(value)
+            for key, value in events.items()
+            if key.startswith("Multigol ") and key.count(" ") == 2
+        },
         "goal_no_goal": {"Goal": _market(events["Goal"]), "No_Goal": _market(events["No Goal"])},
         "first_half_goal_no_goal": {"Goal": _market(events["Goal 1T"]), "No_Goal": _market(events["No Goal 1T"])},
         "goal_sums": {str(value): _market(events[f"Somma gol {value}"]) for value in range(5)} | {"5+": _market(events["Somma gol 5+"])},

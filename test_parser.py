@@ -117,3 +117,15 @@ def test_parser_reads_unprefixed_quotes_with_multiple_separators():
     assert match.odds["1 + Over 1.5"] == 2.50
     assert match.odds["Over 2.5 gol"] == 2.10
     assert match.odds["Casa DNB"] == 1.70
+
+
+def test_parser_canonicalizes_dynamic_team_multigol_labels():
+    text = VALID.replace(
+        "ARBITRO: Gialli medi 4.5 | Falli medi 24",
+        "ARBITRO: Gialli medi 4.5 | Falli medi 24\n"
+        "Quota multigol casa 3 - 4: 2.25 | Quota MULTIGOL ospite 1-4: 2.10",
+    )
+    match = parse_match_input(text)
+
+    assert match.odds["Multigol Casa 3-4"] == 2.25
+    assert match.odds["Multigol Ospite 1-4"] == 2.10
