@@ -475,16 +475,19 @@ def simulate_match(config: MatchConfig) -> dict[str, Any]:
     second_home = rng.poisson(lambda_ / 2.0, config.simulations)
     second_away = rng.poisson(mu / 2.0, config.simulations)
 
-    # Corner inputs are relative team rates.  Use one combined expected rate
-    # (scaled to the usual match-level range) and sample the match total once.
-    # Binomial allocation keeps home + away exactly equal to that total.
-    home_corner_signal = max(0.0, np.mean([config.home.corners_for, config.away.corners_against]))
-    away_corner_signal = max(0.0, np.mean([config.away.corners_for, config.home.corners_against]))
-    corner_signal_total = home_corner_signal + away_corner_signal
-    corner_total_mean = max(0.1, corner_signal_total * 4.5)
-    corners = rng.poisson(corner_total_mean, config.simulations)
+    # Corner total: use only the two pro values, never conceded corners,
+    # odds, or any other submetric.  The total is sampled once from this
+    # single Poisson distribution and then allocated for team-level markets.
+    match_data = {
+        "corners_home_pro": config.home.corners_for,
+        "corners_away_pro": config.away.corners_for,
+    }
+    home_corner_signal = float(match_data.get("corners_home_pro", 6.2))
+    away_corner_signal = float(match_data.get("corners_away_pro", 4.2))
+    lambda_corners = home_corner_signal + away_corner_signal
+    corners = rng.poisson(lambda_corners, config.simulations)
     home_corner_share = (
-        home_corner_signal / corner_signal_total if corner_signal_total > 0.0 else 0.5
+        home_corner_signal / lambda_corners if lambda_corners > 0.0 else 0.5
     )
     home_corners = rng.binomial(corners, home_corner_share)
     away_corners = corners - home_corners
