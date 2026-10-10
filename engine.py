@@ -256,6 +256,47 @@ def _event_catalog(
     return events
 
 
+def _validate_event_catalog(events: Mapping[str, np.ndarray], simulations: int) -> None:
+    """Fail fast if any published market can disagree with the score sample."""
+    required_partitions = (
+        (("1", "X", "2"), "1X2"),
+        (("1X", "X2"), "double chance"),
+        (("Goal", "No Goal"), "goal/no goal"),
+    )
+    for keys, label in required_partitions:
+        masks = [events[key] for key in keys]
+        if any(len(mask) != simulations for mask in masks):
+            raise RuntimeError(f"Maschere {label} non allineate al campione dei gol.")
+    if not np.all(events["1"] | events["X"] | events["2"]):
+        raise RuntimeError("Il catalogo 1X2 non copre ogni risultato simulato.")
+    if np.any(events["1"] & events["X"]) or np.any(events["X"] & events["2"]) or np.any(events["1"] & events["2"]):
+        raise RuntimeError("Il catalogo 1X2 contiene esiti sovrapposti.")
+    if not np.array_equal(events["1X"], events["1"] | events["X"]):
+        raise RuntimeError("La doppia chance 1X non è coerente con il risultato esatto.")
+    if not np.array_equal(events["X2"], events["X"] | events["2"]):
+        raise RuntimeError("La doppia chance X2 non è coerente con il risultato esatto.")
+    if not np.array_equal(events["12"], events["1"] | events["2"]):
+        raise RuntimeError("La doppia chance 12 non è coerente con il risultato esatto.")
+    if not np.array_equal(events["Goal"], ~events["No Goal"]):
+        raise RuntimeError("Goal e No Goal non sono complementari.")
+    for threshold in (0.5, 1.5, 2.5, 3.5, 4.5):
+        over = events[f"Over {threshold:g} gol"]
+        under = events[f"Under {threshold:g} gol"]
+        if not np.array_equal(over, ~under):
+            raise RuntimeError(f"Over/Under {threshold:g} non è coerente con la somma gol.")
+    for value in range(5):
+        exact = events[f"Somma gol {value}"]
+        expected = (
+            ~events["Over 0.5 gol"]
+            if value == 0
+            else events[f"Over {value - 0.5:g} gol"] & ~events[f"Over {value + 0.5:g} gol"]
+        )
+        if not np.array_equal(exact, expected):
+            raise RuntimeError(f"Somma gol {value} non è coerente con Over/Under.")
+    if not np.array_equal(events["Somma gol 5+"], events["Over 4.5 gol"]):
+        raise RuntimeError("Somma gol 5+ non è coerente con Over 4.5.")
+
+
 def _probability(mask: np.ndarray) -> float:
     return float(mask.mean())
 
@@ -420,8 +461,9 @@ def simulate_match(config: MatchConfig) -> dict[str, Any]:
         home, away, first_home, first_away, second_home, second_away,
         home_corners, away_corners, home_cards, away_cards,
     )
+    _validate_event_catalog(events, config.simulations)
     markets = {
-        "1x2": {"1": _market(home > away), "X": _market(home == away), "2": _market(home < away)},
+        "1x2": {key: _market(events[key]) for key in ("1", "X", "2")},
         "double_chance": {key: _market(events[key]) for key in ("1X", "X2", "12")},
         "first_half_1x2": {key: _market(events[f"{key} 1T"]) for key in ("1", "X", "2")},
         "first_half_double_chance": {key: _market(events[f"{key} 1T"]) for key in ("1X", "X2", "12")},
@@ -440,7 +482,7 @@ def simulate_match(config: MatchConfig) -> dict[str, Any]:
         "multigol": {key.replace("Multigol ", ""): _market(events[f"Multigol {key}"]) for key in ("1-2", "1-3", "2-4", "2-5")},
         "multigol_complete": {key.replace("Multigol ", ""): _market(value) for key, value in events.items() if key.startswith("Multigol ") and key.count(" ") == 1},
         "team_multigol": {key.replace("Multigol ", ""): _market(value) for key, value in events.items() if key.startswith("Multigol ") and key.count(" ") == 2},
-        "goal_no_goal": {"Goal": _market((home > 0) & (away > 0)), "No_Goal": _market((home == 0) | (away == 0))},
+        "goal_no_goal": {"Goal": _market(events["Goal"]), "No_Goal": _market(events["No Goal"])},
         "first_half_goal_no_goal": {"Goal": _market(events["Goal 1T"]), "No_Goal": _market(events["No Goal 1T"])},
         "goal_sums": {str(value): _market(events[f"Somma gol {value}"]) for value in range(5)} | {"5+": _market(events["Somma gol 5+"])},
         "team_scoring": {key: _market(events[key]) for key in ("Casa segna", "Casa non segna", "Ospite segna", "Ospite non segna")},

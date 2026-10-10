@@ -1,4 +1,6 @@
-from engine import config_from_input, simulate_match
+import numpy as np
+
+from engine import _event_catalog, config_from_input, simulate_match
 from parser import parse_match_input
 
 from test_parser import VALID
@@ -29,6 +31,33 @@ def test_probabilities_use_the_declared_sample_size():
         assert 0 <= low <= high <= 100
         assert 0 <= market["reliability_pct"] <= 100
         assert market["fair_odds"] > 1.0
+
+
+def test_score_derived_markets_are_coherent_for_every_simulation():
+    result = simulate_match(config_from_input(parse_match_input(VALID), simulations=4000, seed=17))
+    markets = result["markets"]
+    simulation_count = result["model"]["simulation_count"]
+
+    assert sum(markets["1x2"][key]["count"] for key in ("1", "X", "2")) == simulation_count
+    assert markets["double_chance"]["1X"]["count"] + markets["double_chance"]["X2"]["count"] >= simulation_count
+    assert markets["goal_no_goal"]["Goal"]["count"] + markets["goal_no_goal"]["No_Goal"]["count"] == simulation_count
+    assert markets["over_under"]["Over_2.5"]["count"] + markets["over_under"]["Under_2.5"]["count"] == simulation_count
+    assert sum(markets["goal_sums"][str(value)]["count"] for value in range(5)) + markets["goal_sums"]["5+"]["count"] == simulation_count
+    assert markets["multigol_complete"]["2-3"]["count"] <= markets["over_under"]["Over_1.5"]["count"]
+
+
+def test_exact_score_two_one_activates_all_dependent_markets():
+    one = lambda value: np.array([value])
+    events = _event_catalog(one(2), one(1), one(1), one(0), one(1), one(1), one(4), one(3), one(2), one(1))
+
+    assert events["1"][0]
+    assert not events["X2"][0]
+    assert events["Casa DNB"][0]
+    assert events["Over 2.5 gol"][0]
+    assert events["Goal"][0]
+    assert events["Multigol 2-3"][0]
+    assert events["Multigol Casa 1-2"][0]
+    assert events["Somma gol 3"][0]
 
 
 def test_complete_market_catalog_exposes_all_requested_families():

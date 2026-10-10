@@ -315,15 +315,31 @@ def _cards_section(
     columns: int = 3,
 ) -> None:
     st.markdown(f'<div class="section-kicker">{title}</div>', unsafe_allow_html=True)
-    entries = list(items.items())
-    for start in range(0, len(entries), columns):
-        row = entries[start:start + columns]
-        cols = st.columns(columns)
-        for column, (key, market) in zip(cols, row):
-            with column:
-                event_name = event_names.get(key, key)
-                financial = financial_rows.get(event_name, financial_rows.get(key.replace("_", " "), {}))
-                _card(title, labels.get(key, key), market, financial)
+    rows = []
+    for key, market in items.items():
+        event_name = event_names.get(key, key)
+        financial = financial_rows.get(event_name, financial_rows.get(key.replace("_", " "), {}))
+        interval = market.get("confidence_interval_95", [0.0, 0.0])
+        quote = financial.get("odds")
+        ev = financial.get("ev_pct")
+        stake = financial.get("recommended_quarter_kelly_pct")
+        rows.append(
+            {
+                "Mercato": labels.get(key, key),
+                "Quota": f"{float(quote):.2f}" if quote is not None else "—",
+                "Probabilità": f'{float(market["percentage"]):.2f}%',
+                "Wilson 95%": f"[{float(interval[0]):.2f}%, {float(interval[1]):.2f}%]",
+                "EV": f"{float(ev):+.2f}%" if ev is not None else "—",
+                "Badge Valore": (
+                    f"VALORE +{float(ev):.2f}%" if ev is not None and float(ev) > 0
+                    else "NESSUN VALORE" if ev is not None
+                    else "SOLO MODELLO"
+                ),
+                "Quarter-Kelly": f"{float(stake):.2f}%" if stake is not None else "—",
+            }
+        )
+    if rows:
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
 
 def _catalog_cards_section(group: str, result: dict, financial_rows: dict) -> None:
@@ -337,11 +353,29 @@ def _catalog_cards_section(group: str, result: dict, financial_rows: dict) -> No
     if not entries:
         return
     st.markdown(f'<div class="section-kicker">{group.replace("_", " ").title()}</div>', unsafe_allow_html=True)
-    for start in range(0, len(entries), 3):
-        cols = st.columns(3)
-        for column, (definition, market) in zip(cols, entries[start:start + 3]):
-            with column:
-                _card(group, definition.label, market, financial_rows.get(definition.event_key, {}))
+    rows = []
+    for definition, market in entries:
+        financial = financial_rows.get(definition.event_key, {})
+        interval = market.get("confidence_interval_95", [0.0, 0.0])
+        quote = financial.get("odds")
+        ev = financial.get("ev_pct")
+        stake = financial.get("recommended_quarter_kelly_pct")
+        rows.append(
+            {
+                "Mercato": definition.label,
+                "Quota": f"{float(quote):.2f}" if quote is not None else "—",
+                "Probabilità": f'{float(market["percentage"]):.2f}%',
+                "Wilson 95%": f"[{float(interval[0]):.2f}%, {float(interval[1]):.2f}%]",
+                "EV": f"{float(ev):+.2f}%" if ev is not None else "—",
+                "Badge Valore": (
+                    f"VALORE +{float(ev):.2f}%" if ev is not None and float(ev) > 0
+                    else "NESSUN VALORE" if ev is not None
+                    else "SOLO MODELLO"
+                ),
+                "Quarter-Kelly": f"{float(stake):.2f}%" if stake is not None else "—",
+            }
+        )
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
 
 result = st.session_state.get("result")
@@ -357,7 +391,17 @@ if result:
     metrics[4].metric("Affidabilità campionaria", f'{summary["reliability"]["index_pct"]}%')
 
     financial_rows = {row["market"]: row for row in result["financial"]["markets"]}
-    tabs = st.tabs(["Esito", "Gol", "Multigol / Combo", "Corner", "Cartellini", "Dashboard", "Parziali", "Squadre", "Completo"])
+    tabs = st.tabs([
+        "Esiti & Doppia Chance",
+        "Gol & Under/Over",
+        "Multigol Totali & Squadra",
+        "Corner",
+        "Cartellini",
+        "Dashboard",
+        "Parziali",
+        "Squadre",
+        "Catalogo completo",
+    ])
     with tabs[0]:
         _cards_section(
             "1X2 finale",
