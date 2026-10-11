@@ -15,11 +15,11 @@ from typing import Any, Mapping
 import numpy as np
 from scipy.stats import poisson
 
-from market_catalog import MARKET_CATALOG, definition_for_event
+from market_catalog import MARKET_CATALOG, MULTIGOL_RANGES, definition_for_event
 from parser import MatchInput
 
 
-_DEFAULT_TEAM_MULTIGOL_RANGES = ((1, 2), (1, 3), (2, 3))
+_DEFAULT_TEAM_MULTIGOL_RANGES = MULTIGOL_RANGES
 _TEAM_MULTIGOL_KEY = re.compile(r"^Multigol (?P<team>Casa|Ospite) (?P<low>\d+)-(?P<high>\d+)$")
 
 
@@ -202,7 +202,7 @@ def _event_catalog(
         for threshold in (0.5, 1.5, 2.5):
             events[f"{team_name} Over {threshold:g} gol"] = values > threshold
             events[f"{team_name} Under {threshold:g} gol"] = values < threshold
-    for low, high in ((1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (2, 5), (3, 5), (3, 6)):
+    for low, high in MULTIGOL_RANGES:
         events[f"Multigol {low}-{high}"] = (total >= low) & (total <= high)
     for team_name, values in (("Casa", home), ("Ospite", away)):
         for low, high in team_multigol_ranges:
@@ -256,7 +256,7 @@ def _event_catalog(
         ("1", "Multigol 1-3", "1 + Multigol 1-3"),
     ):
         events[label] = events[first_result] & events[second_result]
-    for low, high in ((1, 2), (1, 3), (2, 3)):
+    for low, high in MULTIGOL_RANGES:
         events[f"1 + Multigol {low}-{high}"] = events["1"] & events[f"Multigol {low}-{high}"]
         events[f"2 + Multigol {low}-{high}"] = events["2"] & events[f"Multigol {low}-{high}"]
     return events
@@ -341,7 +341,10 @@ def financial_analysis(events: Mapping[str, np.ndarray], odds: Mapping[str, floa
         ev = probability * (odd - 1.0) - loss_probability
         denominator = (odd - 1.0) * (probability + loss_probability)
         full_kelly = max(0.0, (probability * (odd - 1.0) - loss_probability) / denominator) if denominator else 0.0
-        fair_odds = 1.0 + loss_probability / probability if probability > 0 else None
+        fair_odds = 1.0 / probability if probability > 0 else None
+        settlement_fair_odds = (
+            1.0 + loss_probability / probability if probability > 0 else None
+        )
         candidates.append({
             "market": market,
             "odds": odd,
@@ -352,6 +355,11 @@ def financial_analysis(events: Mapping[str, np.ndarray], odds: Mapping[str, floa
             "push_probability_pct": round(push_probability * 100.0, 2),
             "loss_probability_pct": round(loss_probability * 100.0, 2),
             "fair_odds": round(fair_odds, 3) if fair_odds is not None else None,
+            "settlement_fair_odds": (
+                round(settlement_fair_odds, 3)
+                if settlement_fair_odds is not None
+                else None
+            ),
             "kelly_pct": round(full_kelly * 100.0, 2),
             "kelly_fraction": 0.25,
             "recommended_quarter_kelly_pct": round(full_kelly * 25.0, 2),
@@ -361,10 +369,13 @@ def financial_analysis(events: Mapping[str, np.ndarray], odds: Mapping[str, floa
             "is_value": ev > 0.0,
         })
     candidates.sort(key=lambda item: (item["ev_pct"], item["edge_pct"]), reverse=True)
+    value_bets = [item for item in candidates if item["ev_pct"] > 0.0]
     return {
         "quotes_provided": len(candidates),
         "markets": candidates,
-        "best_value": candidates[0] if candidates else None,
+        "value_bets": value_bets,
+        "best_value": value_bets[0] if value_bets else None,
+        "value_threshold_ev_pct": 0.0,
         "risk_note": "Kelly è una stima sensibile all'errore del modello; viene mostrato un quarto Kelly, non una garanzia.",
     }
 
@@ -534,7 +545,10 @@ def simulate_match(config: MatchConfig) -> dict[str, Any]:
             **{f"Under_{threshold}": _market(events[f"Under {threshold:g} gol 1T"]) for threshold in (0.5, 1.5)},
         },
         "team_goals": {key: _market(events[key]) for key in events if key.startswith(("Casa ", "Ospite ")) and "gol" in key},
-        "multigol": {key.replace("Multigol ", ""): _market(events[f"Multigol {key}"]) for key in ("1-2", "1-3", "2-4", "2-5")},
+        "multigol": {
+            key.replace("Multigol ", ""): _market(events[f"Multigol {key}"])
+            for key in ("1-2", "1-3", "2-4", "2-5")
+        },
         "multigol_complete": {key.replace("Multigol ", ""): _market(value) for key, value in events.items() if key.startswith("Multigol ") and key.count(" ") == 1},
         "team_multigol": {
             key.replace("Multigol ", ""): _market(value)

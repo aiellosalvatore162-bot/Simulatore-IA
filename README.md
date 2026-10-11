@@ -31,7 +31,8 @@ esplicitamente mostrato dalla UI.
 Le quote sono opzionali e possono essere aggiunte alle righe `CASA` e
 `OSPITE`, ad esempio `Quota 1`, `Quota X`, `Quota 2`, `Quota Over 2.5` o
 `Quota Under 3.5`. Vengono normalizzate dal parser e passate automaticamente
-al motore per l'analisi Value Bet.
+al motore per l'analisi Value Bet. Sono supportate tutte le fasce multigol
+totali, Casa e Ospite da `1-2` a `3-6`, incluse `1-5`, `2-6`, `3-4` e `3-5`.
 
 Il catalogo dichiarativo condiviso è in [`market_catalog.py`](./market_catalog.py):
 le sue definizioni vengono usate per normalizzare le quote, validare i mercati,
@@ -63,6 +64,11 @@ raggruppati in esiti finali e parziali, goal e multigol, somme e combo,
 corner e cartellini. Ogni voce di mercato contiene conteggio, percentuale,
 intervallo Wilson 95% e indice di affidabilità; le quote fornite dall'utente
 vengono analizzate con EV e Quarter-Kelly.
+La sezione Value Bet mostra in primo piano solo i mercati con EV positivo,
+ordinati per valore atteso; per ciascuno la quota equa è `1 / P_simulata` e
+la puntata indicativa è il Quarter-Kelly. Le quote con EV nullo o negativo
+restano disponibili nell'audit completo, ma non vengono consigliate per il
+profitto.
 
 Il testo prodotto è una sintesi numerica nell'interfaccia, non viene chiamato
 “IA” e non contiene frasi narrative generate da template.

@@ -22,6 +22,11 @@ class MarketDefinition:
 
 
 _definitions: list[MarketDefinition] = []
+MULTIGOL_RANGES: tuple[tuple[int, int], ...] = (
+    (1, 2), (1, 3), (1, 4), (1, 5),
+    (2, 3), (2, 4), (2, 5), (2, 6),
+    (3, 4), (3, 5), (3, 6),
+)
 
 
 def _add(key: str, label: str, group: str, event_key: str | None = None, settlement: str = "binary", combo_legs: tuple[str, ...] = ()) -> None:
@@ -60,11 +65,11 @@ _add("goal", "Goal", "goal_no_goal", "Goal")
 _add("no_goal", "No Goal", "goal_no_goal", "No Goal")
 _add("goal_1t", "Goal 1° tempo", "first_half_goal_no_goal", "Goal 1T")
 _add("no_goal_1t", "No Goal 1° tempo", "first_half_goal_no_goal", "No Goal 1T")
-for low, high in ((1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (2, 5), (3, 5), (3, 6)):
+for low, high in MULTIGOL_RANGES:
     event = f"Multigol {low}-{high}"
     _add(f"multigol_{low}_{high}", event, "multigol_complete", event)
 for team in ("Casa", "Ospite"):
-    for low, high in ((1, 2), (1, 3), (2, 3)):
+    for low, high in MULTIGOL_RANGES:
         event = f"Multigol {team} {low}-{high}"
         _add(f"multigol_{team.lower()}_{low}_{high}", event, "team_multigol", event)
 for value in ("0", "1", "2", "3", "4", "5+"):
@@ -111,7 +116,7 @@ _COMBOS = (
 )
 for label, legs in _COMBOS:
     _add(label.lower().replace(" ", "_"), label, "combos", label, "binary", legs)
-for low, high in ((1, 2), (1, 3), (2, 3)):
+for low, high in MULTIGOL_RANGES:
     for result in ("1", "2"):
         label = f"{result} + Multigol {low}-{high}"
         _add(label.lower().replace(" ", "_"), label, "combos", label, "binary", (result, f"Multigol {low}-{high}"))

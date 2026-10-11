@@ -533,10 +533,26 @@ if result:
         st.info(result["smart_combo"]["message"])
 
     st.subheader("Value bet e rischio")
-    if result["financial"]["markets"]:
-        st.dataframe(pd.DataFrame(result["financial"]["markets"]), use_container_width=True)
+    value_bets = result["financial"].get("value_bets", [])
+    if value_bets:
+        best_value = result["financial"]["best_value"]
+        st.success(
+            f"Consigliato per il Profitto: {best_value['market']} · "
+            f"EV {best_value['ev_pct']:+.2f}% · Quarter-Kelly "
+            f"{best_value['recommended_stake_pct']:.2f}% del bankroll"
+        )
+        st.dataframe(pd.DataFrame(value_bets), use_container_width=True)
+        st.caption(
+            "Mostrate solo quote con EV positivo, ordinate dal valore atteso più alto. "
+            "La quota equa è 1 / probabilità simulata."
+        )
     else:
-        st.info("Nessuna quota valida inserita.")
+        st.info("Nessuna Value Bet a EV positivo tra le quote inserite.")
+    with st.expander("Audit completo delle quote"):
+        if result["financial"]["markets"]:
+            st.dataframe(pd.DataFrame(result["financial"]["markets"]), use_container_width=True)
+        else:
+            st.info("Nessuna quota valida inserita.")
     st.caption(result["financial"]["risk_note"])
 
     st.subheader("Sintesi statistica del modello")

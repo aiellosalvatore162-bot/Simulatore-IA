@@ -129,3 +129,21 @@ def test_parser_canonicalizes_dynamic_team_multigol_labels():
 
     assert match.odds["Multigol Casa 3-4"] == 2.25
     assert match.odds["Multigol Ospite 1-4"] == 2.10
+
+
+def test_parser_reads_all_extended_multigol_ranges_without_truncation():
+    text = VALID.replace(
+        "ARBITRO: Gialli medi 4.5 | Falli medi 24",
+        "ARBITRO: Gialli medi 4.5 | Falli medi 24\n"
+        "Quota Multigol Totale 1-5: 1.80 | Quota Multigol Totale 2-6: 2.10 | "
+        "Quota Multigol Totale 3-4: 2.40 | Quota Multigol Totale 3-6: 1.60 | "
+        "Quota Multigol Casa 1-4: 1.75 | Quota Multigol Casa 2-5: 2.00 | "
+        "Quota Multigol Ospite 2-6: 2.15 | Quota Multigol Ospite 3-5: 2.30",
+    )
+    match = parse_match_input(text)
+
+    assert set(match.odds) == {
+        "Multigol 1-5", "Multigol 2-6", "Multigol 3-4", "Multigol 3-6",
+        "Multigol Casa 1-4", "Multigol Casa 2-5",
+        "Multigol Ospite 2-6", "Multigol Ospite 3-5",
+    }

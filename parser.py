@@ -66,18 +66,26 @@ _QUOTE_SECTION = re.compile(
     r"QUOTE_CORNER_E_CARTELLINI|QUOTE_COMBO)\s*:?\s*$",
     re.IGNORECASE,
 )
+_MULTIGOL_LABEL = re.compile(
+    r"^Multigol\s+(?:(?:Totale|Totali)\s+)?"
+    r"(?:(Casa|Ospite)\s+)?(\d+)\s*-\s*(\d+)$",
+    re.IGNORECASE,
+)
 _TEAM_MULTIGOL_KEY = re.compile(r"^Multigol (Casa|Ospite) \d+-\d+$")
+
+
 def _normalize_quote_label(label: str) -> str:
     normalized = re.sub(r"\s+", " ", label.strip().replace("_", " "))
     normalized = re.sub(r"^quota\s+", "", normalized, flags=re.IGNORECASE)
-    team_multigol = re.fullmatch(r"Multigol\s+(Casa|Ospite)\s+(\d+)\s*-\s*(\d+)", normalized, re.IGNORECASE)
-    if team_multigol:
-        return f"Multigol {team_multigol.group(1).title()} {team_multigol.group(2)}-{team_multigol.group(3)}"
+    multigol = _MULTIGOL_LABEL.fullmatch(normalized)
+    if multigol:
+        team, low, high = multigol.groups()
+        prefix = f"{team.title()} " if team else ""
+        return f"Multigol {prefix}{low}-{high}"
     normalized = re.sub(r"\bcorner\b", "corner", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"\bcartellini\b", "cartellini", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"\bgol\b", "gol", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"^DNB\s+(Casa|Ospite)$", r"\1 DNB", normalized, flags=re.IGNORECASE)
-    normalized = re.sub(r"^Multigol\s+(?:Totale|Totali)\s+", "Multigol ", normalized, flags=re.IGNORECASE)
     normalized = normalize_market_label(normalized)
     for event_key in event_keys():
         if event_key.casefold() == normalized.casefold():

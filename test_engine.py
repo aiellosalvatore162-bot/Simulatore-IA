@@ -93,7 +93,10 @@ def test_complete_market_catalog_exposes_all_requested_families():
         "Over_2.5", "Under_2.5", "Over_3.5", "Under_3.5",
         "Over_4.5", "Under_4.5",
     }
-    assert set(markets["multigol_complete"]) == {"1-2", "1-3", "1-4", "2-3", "2-4", "2-5", "3-5", "3-6"}
+    assert set(markets["multigol_complete"]) == {
+        "1-2", "1-3", "1-4", "1-5", "2-3", "2-4", "2-5", "2-6",
+        "3-4", "3-5", "3-6",
+    }
     assert set(markets["goal_sums"]) == {"0", "1", "2", "3", "4", "5+"}
     assert len(markets["combos"]) >= 10
     assert set(markets["corner_1x2"]) == {"1", "X", "2"}
